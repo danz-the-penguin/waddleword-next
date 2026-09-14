@@ -1,0 +1,493 @@
+/* src/App.css - Layout-only overrides for WaddleWord Next */
+/* The Win98 theme is handled entirely by styles/win98.css */
+/* This file only contains component-specific styles not covered by the theme */
+
+/* Bingo Radar - adapted for Win98 surface */
+.bingo-radar-card {
+  background-color: var(--w98-surface);
+  border: 2px solid;
+  border-color: var(--w98-border-light) var(--w98-border-dark) var(--w98-border-dark) var(--w98-border-light);
+  box-shadow: 1px 1px 0px var(--w98-text);
+  padding: 8px;
+  margin-bottom: 10px;
+}
+
+.radar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.radar-title {
+  font-size: 12px;
+  font-weight: bold;
+  flex: 1;
+  margin-left: 6px;
+}
+
+.radar-badge {
+  font-size: 10px;
+  font-weight: bold;
+  padding: 2px 6px;
+  color: white;
+}
+
+.prob-meter-container { margin-bottom: 10px; }
+
+.prob-value-wrapper {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 4px;
+}
+
+.prob-number {
+  font-size: 22px;
+  font-weight: 900;
+}
+
+.prob-subtext {
+  font-size: 11px;
+  color: var(--w98-border-darker);
+}
+
+.progress-track {
+  width: 100%;
+  height: 6px;
+  background-color: var(--w98-surface-inset);
+  border: 1px solid;
+  border-color: var(--w98-border-dark) var(--w98-border-light) var(--w98-border-light) var(--w98-border-dark);
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  transition: width 0.3s ease;
+}
+
+.radar-stats-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  background-color: var(--w98-surface-inset);
+  padding: 6px;
+  border: 1px solid;
+  border-color: var(--w98-border-dark) var(--w98-border-light) var(--w98-border-light) var(--w98-border-dark);
+}
+
+.radar-stat-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.stat-label {
+  font-size: 9px;
+  text-transform: uppercase;
+  color: var(--w98-border-darker);
+  font-weight: bold;
+}
+
+.stat-val {
+  font-size: 12px;
+  font-weight: bold;
+  font-family: monospace;
+}
+
+.stat-hint {
+  font-size: 9px;
+  color: var(--w98-border-dark);
+}
+
+/* Endgame Card - adapted for Win98 */
+.endgame-card {
+  background-color: var(--w98-surface);
+  border: 2px solid;
+  border-color: var(--w98-border-light) var(--w98-border-dark) var(--w98-border-dark) var(--w98-border-light);
+  box-shadow: 1px 1px 0px var(--w98-text);
+  padding: 8px;
+  margin-bottom: 10px;
+}
+
+.endgame-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.endgame-title {
+  font-size: 12px;
+  font-weight: bold;
+}
+
+.endgame-sub {
+  font-size: 10px;
+  color: var(--w98-border-darker);
+}
+
+.endgame-margin-badge {
+  font-size: 11px;
+  font-weight: bold;
+  padding: 2px 6px;
+}
+
+.margin-positive {
+  background-color: #2e7d32;
+  color: #ffffff;
+}
+
+.pv-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 6px 0;
+}
+
+.pv-step {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background-color: var(--w98-surface-inset);
+  padding: 4px 8px;
+  border: 1px solid var(--w98-border-dark);
+}
+
+.step-badge {
+  font-size: 9px;
+  font-weight: bold;
+  text-transform: uppercase;
+  color: #000080;
+}
+
+.endgame-explainer {
+  font-size: 10px;
+  color: var(--w98-border-darker);
+}
+
+/* Move List - adapted for Win98 */
+.move-list-container {
+  background-color: var(--w98-surface);
+  border: 2px solid;
+  border-color: var(--w98-border-light) var(--w98-border-dark) var(--w98-border-dark) var(--w98-border-light);
+  box-shadow: 1px 1px 0px var(--w98-text);
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+
+.move-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--w98-border-dark);
+  background-color: var(--w98-surface);
+}
+
+.move-list-title-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.move-list-title {
+  font-size: 12px;
+  font-weight: bold;
+  margin: 0;
+}
+
+.count-tag {
+  background-color: var(--w98-surface-inset);
+  font-size: 10px;
+  padding: 1px 4px;
+  border: 1px solid var(--w98-border-dark);
+  font-family: monospace;
+}
+
+.sort-toggle-group {
+  display: flex;
+  gap: 4px;
+}
+
+.sort-btn {
+  background-color: var(--w98-surface);
+  border: 2px solid;
+  border-color: var(--w98-border-light) var(--w98-border-dark) var(--w98-border-dark) var(--w98-border-light);
+  font-size: 10px;
+  font-weight: bold;
+  padding: 2px 6px;
+  cursor: pointer;
+  color: var(--w98-text);
+}
+
+.sort-btn.active {
+  background-color: var(--w98-highlight);
+  color: var(--w98-text-light);
+  border-color: var(--w98-border-dark) var(--w98-border-light) var(--w98-border-light) var(--w98-border-dark);
+}
+
+.plays-scrollable {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 400px;
+}
+
+.play-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 6px;
+  border-bottom: 1px dotted var(--w98-border-dark);
+  cursor: pointer;
+}
+
+.play-card:hover {
+  background-color: var(--w98-highlight);
+  color: var(--w98-text-light);
+  outline: 1px dotted var(--w98-text-light);
+  outline-offset: -1px;
+}
+
+.play-card:hover * {
+  color: var(--w98-text-light) !important;
+}
+
+.top-play {
+  background-color: #e8e8ff;
+}
+
+.bingo-play {
+  background-color: #fff0f5;
+}
+
+.play-card-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.play-rank {
+  font-size: 11px;
+  color: var(--w98-border-darker);
+  width: 24px;
+  font-family: monospace;
+}
+
+.play-word {
+  font-size: 13px;
+  font-weight: bold;
+  letter-spacing: 0.5px;
+}
+
+.play-coord {
+  font-size: 10px;
+  color: var(--w98-border-darker);
+  margin-left: 4px;
+  font-family: monospace;
+}
+
+.play-badges-mid {
+  display: flex;
+  gap: 4px;
+}
+
+.badge {
+  font-size: 9px;
+  font-weight: bold;
+  padding: 1px 4px;
+}
+
+.badge-bingo {
+  background-color: #e3f2fd;
+  color: #1565c0;
+  border: 1px solid #90caf9;
+}
+
+.badge-radar {
+  background-color: #e8f5e9;
+  color: #2e7d32;
+  border: 1px solid #a5d6a7;
+}
+
+.badge-threat {
+  background-color: #455a64;
+  color: #ffffff;
+  border: 1px solid #78909c;
+}
+
+.play-card-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.score-box {
+  display: flex;
+  align-items: baseline;
+  gap: 2px;
+  color: #008000;
+}
+
+.score-val {
+  font-size: 14px;
+  font-weight: bold;
+}
+
+.score-sub {
+  font-size: 8px;
+  text-transform: uppercase;
+}
+
+.val-box {
+  display: flex;
+  align-items: baseline;
+  gap: 2px;
+  color: #000080;
+}
+
+.val-number {
+  font-size: 12px;
+  font-weight: bold;
+  font-family: monospace;
+}
+
+.val-sub {
+  font-size: 8px;
+  color: var(--w98-border-darker);
+}
+
+/* Modal - adapted for Win98 */
+.modal-backdrop {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.modal-content {
+  width: 90%;
+  max-width: 680px;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px 4px;
+}
+
+.close-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.review-body {
+  padding: 10px;
+  overflow-y: auto;
+}
+
+.gcg-textarea {
+  width: 100%;
+  background-color: var(--w98-surface-inset);
+  border: 2px solid;
+  border-color: var(--w98-border-dark) var(--w98-border-light) var(--w98-border-light) var(--w98-border-dark);
+  color: var(--w98-text);
+  padding: 8px;
+  font-size: 12px;
+  font-family: monospace;
+  margin: 8px 0;
+}
+
+.primary-action-btn {
+  background-color: var(--w98-surface);
+  border: 2px solid;
+  border-color: var(--w98-border-light) var(--w98-border-dark) var(--w98-border-dark) var(--w98-border-light);
+  box-shadow: 1px 1px 0px var(--w98-text);
+  padding: 4px 12px;
+  font-weight: bold;
+  cursor: pointer;
+  color: var(--w98-text);
+}
+
+.turns-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.turn-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+  background-color: var(--w98-surface-inset);
+  border: 1px solid var(--w98-border-dark);
+  cursor: pointer;
+}
+
+.turn-item:hover {
+  background-color: var(--w98-highlight);
+  color: var(--w98-text-light);
+}
+
+.turn-item:hover * {
+  color: var(--w98-text-light) !important;
+}
+
+.turn-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.turn-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.eval-badge {
+  font-size: 9px;
+  font-weight: bold;
+  padding: 1px 4px;
+}
+
+.badge-best { background-color: #2e7d32; color: #ffffff; }
+.badge-excellent { background-color: #1565c0; color: #ffffff; }
+.badge-inaccuracy { background-color: #f57f17; color: #000000; }
+.badge-mistake { background-color: #c62828; color: #ffffff; }
+
+/* Font helpers */
+.font-mono { font-family: monospace; }
+.font-bold { font-weight: 700; }
+
+/* Rack input row for controls panel */
+.rack-input-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.rack-input {
+  flex: 1;
+  font-family: monospace;
+  font-weight: bold;
+  font-size: 14px;
+  text-transform: uppercase;
+}
