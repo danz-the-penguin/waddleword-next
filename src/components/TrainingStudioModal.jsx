@@ -974,27 +974,35 @@ export default function TrainingStudioModal({
                   </div>
 
                   {/* Preset Quick Buttons */}
-                  <div style={{ display: "flex", gap: "6px", marginTop: "4px" }}>
+                  <div style={{ display: "flex", gap: "6px", marginTop: "4px", flexWrap: "wrap" }}>
                     <button
                       className="win98-button"
-                      onClick={() => handleSliderChange(8)}
-                      style={{ fontWeight: sliderThreads === 8 ? "bold" : "normal" }}
+                      onClick={() => handleSliderChange(Math.max(1, systemSpecs.logical_cores - 1))}
+                      style={{ fontWeight: sliderThreads === Math.max(1, systemSpecs.logical_cores - 1) ? "bold" : "normal", color: "#000080" }}
+                      title="Reserves 1 CPU core for macOS/Linux GUI thread & 60 FPS rendering"
                     >
-                      🚀 8 Cores (Full Throttle)
+                      🛡️ Balanced ({Math.max(1, systemSpecs.logical_cores - 1)} Cores - GUI Core Reserved)
                     </button>
                     <button
                       className="win98-button"
-                      onClick={() => handleSliderChange(4)}
-                      style={{ fontWeight: sliderThreads === 4 ? "bold" : "normal" }}
+                      onClick={() => handleSliderChange(systemSpecs.logical_cores)}
+                      style={{ fontWeight: sliderThreads === systemSpecs.logical_cores ? "bold" : "normal" }}
                     >
-                      🔋 4 Cores (P-Cores / Low Heat)
+                      🚀 {systemSpecs.logical_cores} Cores (Max)
+                    </button>
+                    <button
+                      className="win98-button"
+                      onClick={() => handleSliderChange(Math.max(1, Math.floor(systemSpecs.logical_cores / 2)))}
+                      style={{ fontWeight: sliderThreads === Math.max(1, Math.floor(systemSpecs.logical_cores / 2)) ? "bold" : "normal" }}
+                    >
+                      🔋 {Math.max(1, Math.floor(systemSpecs.logical_cores / 2))} Cores (Eco)
                     </button>
                     <button
                       className="win98-button"
                       onClick={() => handleSliderChange(1)}
                       style={{ fontWeight: sliderThreads === 1 ? "bold" : "normal" }}
                     >
-                      🐌 1 Core (Single-Threaded)
+                      🐌 1 Core
                     </button>
                   </div>
                 </div>
