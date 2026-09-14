@@ -39,6 +39,70 @@ pub struct CandidatePlay {
     pub net_margin: f32,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct FastPlay {
+    pub word: String,
+    pub score: i16,
+    pub row: usize,
+    pub col: usize,
+    pub is_vertical: bool,
+}
+
+#[inline(always)]
+pub fn compute_play_score(
+    min_pos: usize,
+    max_pos: usize,
+    tiles_used: u8,
+    line_idx: usize,
+    is_vertical: bool,
+    line_tiles: &[u8; 15],
+    line_cross_scores: &[i16; 15],
+    line_has_perp: &[bool; 15],
+    placed_letters: &[u8; 15],
+    placed_is_blank: &[bool; 15],
+) -> i16 {
+    let mut main_word_score = 0i16;
+    let mut main_word_mult = 1i16;
+    let mut total_perp_score = 0i16;
+
+    for pos in min_pos..max_pos {
+        let letter_code = placed_letters[pos];
+        let is_blank = placed_is_blank[pos];
+        let is_fresh = line_tiles[pos] == 0;
+
+        if is_fresh {
+            let g_idx = if is_vertical { pos * 15 + line_idx } else { line_idx * 15 + pos };
+            let prem = BOARD_PREMIUMS[g_idx];
+            let base_val = if is_blank { 0 } else { LETTER_SCORES[letter_code as usize] };
+
+            let (let_mult, word_mult) = match prem {
+                Premium::DoubleLetter => (2, 1),
+                Premium::TripleLetter => (3, 1),
+                Premium::DoubleWord => (1, 2),
+                Premium::TripleWord => (1, 3),
+                Premium::None => (1, 1),
+            };
+
+            main_word_score += base_val * let_mult;
+            main_word_mult *= word_mult;
+
+            if line_has_perp[pos] {
+                let perp_score = (line_cross_scores[pos] + base_val * let_mult) * word_mult;
+                total_perp_score += perp_score;
+            }
+        } else {
+            let base_val = if is_blank { 0 } else { LETTER_SCORES[letter_code as usize] };
+            main_word_score += base_val;
+        }
+    }
+
+    let mut total_score = main_word_score * main_word_mult + total_perp_score;
+    if tiles_used == 7 {
+        total_score += 50;
+    }
+    total_score
+}
+
 struct MultiCorridor {
     is_vert: bool,
     line: usize,
@@ -402,10 +466,6 @@ impl<'a> MoveGenerator<'a> {
         placed_letters: &[u8; 15],
         placed_is_blank: &[bool; 15],
     ) {
-        let mut main_word_score = 0i16;
-        let mut main_word_mult = 1i16;
-        let mut total_perp_score = 0i16;
-
         let mut word_str = String::with_capacity(max_pos - min_pos);
         let mut placed_indices = [0usize; 15];
         let mut placed_count = 0usize;
@@ -435,36 +495,22 @@ impl<'a> MoveGenerator<'a> {
                 {
                     exposes_3w = true;
                 }
-
-                let prem = BOARD_PREMIUMS[g_idx];
-                let base_val = if is_blank { 0 } else { LETTER_SCORES[letter_code as usize] };
-
-                let (let_mult, word_mult) = match prem {
-                    Premium::DoubleLetter => (2, 1),
-                    Premium::TripleLetter => (3, 1),
-                    Premium::DoubleWord => (1, 2),
-                    Premium::TripleWord => (1, 3),
-                    Premium::None => (1, 1),
-                };
-
-                main_word_score += base_val * let_mult;
-                main_word_mult *= word_mult;
-
-                if line_has_perp[pos] {
-                    let perp_score = (line_cross_scores[pos] + base_val * let_mult) * word_mult;
-                    total_perp_score += perp_score;
-                }
-            } else {
-                let base_val = if is_blank { 0 } else { LETTER_SCORES[letter_code as usize] };
-                main_word_score += base_val;
             }
         }
 
-        let mut total_score = main_word_score * main_word_mult + total_perp_score;
+        let total_score = compute_play_score(
+            min_pos,
+            max_pos,
+            tiles_used,
+            line_idx,
+            is_vertical,
+            line_tiles,
+            line_cross_scores,
+            line_has_perp,
+            placed_letters,
+            placed_is_blank,
+        );
         let is_bingo = tiles_used == 7;
-        if is_bingo {
-            total_score += 50;
-        }
 
         let row = if is_vertical { min_pos } else { line_idx };
         let col = if is_vertical { line_idx } else { min_pos };
@@ -590,5 +636,379 @@ impl<'a> MoveGenerator<'a> {
             win_prob: 50.0,
             net_margin: 0.0,
         });
+    }
+}
+
+pub struct FastMoveScanner<'a> {
+    board: &'a Board,
+    gaddag: &'a Gaddag,
+    rack_counts: [u8; 26],
+    wildcards: u8,
+    pub best_play: Option<FastPlay>,
+    pub max_score: i16,
+}
+
+impl<'a> FastMoveScanner<'a> {
+    pub fn find_best_play(board: &'a Board, gaddag: &'a Gaddag, rack: &str) -> Option<FastPlay> {
+        let mut scanner = Self::new(board, gaddag, rack);
+        scanner.scan(true);
+        scanner.best_play
+    }
+
+    pub fn find_max_score(board: &'a Board, gaddag: &'a Gaddag, rack: &str) -> i16 {
+        let mut scanner = Self::new(board, gaddag, rack);
+        scanner.scan(false);
+        scanner.max_score
+    }
+
+    fn new(board: &'a Board, gaddag: &'a Gaddag, rack: &str) -> Self {
+        let mut rack_counts = [0u8; 26];
+        let mut wildcards = 0u8;
+
+        for ch in rack.chars() {
+            if ch == '?' {
+                wildcards += 1;
+            } else if ('a'..='z').contains(&ch) {
+                let code = ch as u8 - b'a';
+                rack_counts[code as usize] += 1;
+            } else if ('A'..='Z').contains(&ch) {
+                let code = ch as u8 - b'A';
+                rack_counts[code as usize] += 1;
+            }
+        }
+
+        Self {
+            board,
+            gaddag,
+            rack_counts,
+            wildcards,
+            best_play: None,
+            max_score: 0,
+        }
+    }
+
+    fn scan(&mut self, record_word: bool) {
+        if self.board.is_empty() {
+            self.scan_line(7, false, record_word);
+            self.scan_line(7, true, record_word);
+            return;
+        }
+
+        for r in 0..15 {
+            self.scan_line(r, false, record_word);
+        }
+        for c in 0..15 {
+            self.scan_line(c, true, record_word);
+        }
+    }
+
+    fn scan_line(&mut self, line_idx: usize, is_vertical: bool, record_word: bool) {
+        let mut line_tiles = [0u8; 15];
+        let mut line_is_blank = [false; 15];
+        let mut line_anchors = [false; 15];
+        let mut line_cross_masks = [0u32; 15];
+        let mut line_cross_scores = [0i16; 15];
+        let mut line_has_perp = [false; 15];
+        let mut line_tiles_mask = 0u16;
+
+        let mut has_any_anchor = false;
+        for i in 0..15 {
+            let g_idx = if is_vertical { i * 15 + line_idx } else { line_idx * 15 + i };
+            let t = self.board.tiles[g_idx];
+            line_tiles[i] = t;
+            line_is_blank[i] = self.board.is_blank[g_idx];
+            if t != 0 {
+                line_tiles_mask |= 1 << i;
+            }
+
+            let anc = self.board.is_anchor[g_idx];
+            line_anchors[i] = anc;
+            if anc {
+                has_any_anchor = true;
+            }
+
+            if is_vertical {
+                line_cross_masks[i] = self.board.cross_mask_h[g_idx];
+                line_cross_scores[i] = self.board.cross_score_base_h[g_idx];
+                line_has_perp[i] = self.board.has_perp_h[g_idx];
+            } else {
+                line_cross_masks[i] = self.board.cross_mask_v[g_idx];
+                line_cross_scores[i] = self.board.cross_score_base_v[g_idx];
+                line_has_perp[i] = self.board.has_perp_v[g_idx];
+            }
+        }
+
+        if !has_any_anchor {
+            return;
+        }
+
+        let mut placed_letters = [0u8; 15];
+        let mut placed_is_blank = [false; 15];
+
+        for anchor_pos in 0..15 {
+            if !line_anchors[anchor_pos] {
+                continue;
+            }
+
+            self.scan_recursive(
+                anchor_pos,
+                anchor_pos as isize,
+                0,
+                -1,
+                anchor_pos,
+                anchor_pos + 1,
+                0,
+                line_idx,
+                is_vertical,
+                &line_tiles,
+                &line_is_blank,
+                line_tiles_mask,
+                &line_cross_masks,
+                &line_cross_scores,
+                &line_has_perp,
+                &mut placed_letters,
+                &mut placed_is_blank,
+                record_word,
+            );
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn scan_recursive(
+        &mut self,
+        anchor_pos: usize,
+        curr_pos: isize,
+        node_idx: usize,
+        direction: isize,
+        min_pos: usize,
+        max_pos: usize,
+        tiles_used: u8,
+        line_idx: usize,
+        is_vertical: bool,
+        line_tiles: &[u8; 15],
+        line_is_blank: &[bool; 15],
+        line_tiles_mask: u16,
+        line_cross_masks: &[u32; 15],
+        line_cross_scores: &[i16; 15],
+        line_has_perp: &[bool; 15],
+        placed_letters: &mut [u8; 15],
+        placed_is_blank: &mut [bool; 15],
+        record_word: bool,
+    ) {
+        if node_idx != 0 {
+            let entry = self.gaddag.nodes[node_idx];
+            if (entry & 0x20) != 0 && tiles_used > 0 && max_pos > min_pos {
+                let left_clean = min_pos == 0 || (line_tiles_mask & (1 << (min_pos - 1))) == 0;
+                let right_clean = if direction > 0 {
+                    curr_pos >= 15 || (line_tiles_mask & (1 << curr_pos)) == 0
+                } else {
+                    anchor_pos + 1 >= 15 || (line_tiles_mask & (1 << (anchor_pos + 1))) == 0
+                };
+
+                if left_clean && right_clean {
+                    let score = compute_play_score(
+                        min_pos,
+                        max_pos,
+                        tiles_used,
+                        line_idx,
+                        is_vertical,
+                        line_tiles,
+                        line_cross_scores,
+                        line_has_perp,
+                        placed_letters,
+                        placed_is_blank,
+                    );
+                    if score > self.max_score {
+                        self.max_score = score;
+                        if record_word {
+                            let mut word_str = String::with_capacity(max_pos - min_pos);
+                            for pos in min_pos..max_pos {
+                                let letter_code = placed_letters[pos];
+                                let is_blank = placed_is_blank[pos];
+                                let letter_char = (b'A' + letter_code) as char;
+                                word_str.push(if is_blank { letter_char.to_ascii_lowercase() } else { letter_char });
+                            }
+                            self.best_play = Some(FastPlay {
+                                word: word_str,
+                                score,
+                                row: if is_vertical { min_pos } else { line_idx },
+                                col: if is_vertical { line_idx } else { min_pos },
+                                is_vertical,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        if direction > 0 && curr_pos >= 15 {
+            return;
+        }
+
+        let mut child_pointer = (self.gaddag.nodes[node_idx] >> 7) as usize;
+        if child_pointer == 0 || child_pointer >= self.gaddag.nodes.len() {
+            return;
+        }
+
+        while child_pointer != 0 && child_pointer < self.gaddag.nodes.len() {
+            let entry = self.gaddag.nodes[child_pointer];
+            let letter_code = (entry & 0x1f) as u8;
+            let has_sibling = (entry & 0x40) != 0;
+
+            if letter_code == REV_CODE {
+                if direction < 0 {
+                    self.scan_recursive(
+                        anchor_pos,
+                        anchor_pos as isize + 1,
+                        child_pointer,
+                        1,
+                        min_pos,
+                        max_pos,
+                        tiles_used,
+                        line_idx,
+                        is_vertical,
+                        line_tiles,
+                        line_is_blank,
+                        line_tiles_mask,
+                        line_cross_masks,
+                        line_cross_scores,
+                        line_has_perp,
+                        placed_letters,
+                        placed_is_blank,
+                        record_word,
+                    );
+                }
+            } else if letter_code < 26 {
+                if (0..15).contains(&curr_pos) {
+                    let pos = curr_pos as usize;
+                    let existing = line_tiles[pos];
+
+                    if existing != 0 {
+                        if existing - 1 == letter_code {
+                            placed_letters[pos] = letter_code;
+                            placed_is_blank[pos] = line_is_blank[pos];
+                            let next_min = if direction < 0 && pos < min_pos { pos } else { min_pos };
+                            let next_max = if direction > 0 && pos + 1 > max_pos { pos + 1 } else { max_pos };
+
+                            self.scan_recursive(
+                                anchor_pos,
+                                curr_pos + direction,
+                                child_pointer,
+                                direction,
+                                next_min,
+                                next_max,
+                                tiles_used,
+                                line_idx,
+                                is_vertical,
+                                line_tiles,
+                                line_is_blank,
+                                line_tiles_mask,
+                                line_cross_masks,
+                                line_cross_scores,
+                                line_has_perp,
+                                placed_letters,
+                                placed_is_blank,
+                                record_word,
+                            );
+                        }
+                    } else if (line_cross_masks[pos] & (1 << letter_code)) != 0 {
+                        let has_natural = self.rack_counts[letter_code as usize] > 0;
+                        let has_wildcard = self.wildcards > 0;
+
+                        if has_natural {
+                            self.rack_counts[letter_code as usize] -= 1;
+                            placed_letters[pos] = letter_code;
+                            placed_is_blank[pos] = false;
+                            let next_min = if direction < 0 && pos < min_pos { pos } else { min_pos };
+                            let next_max = if direction > 0 && pos + 1 > max_pos { pos + 1 } else { max_pos };
+
+                            self.scan_recursive(
+                                anchor_pos,
+                                curr_pos + direction,
+                                child_pointer,
+                                direction,
+                                next_min,
+                                next_max,
+                                tiles_used + 1,
+                                line_idx,
+                                is_vertical,
+                                line_tiles,
+                                line_is_blank,
+                                line_tiles_mask,
+                                line_cross_masks,
+                                line_cross_scores,
+                                line_has_perp,
+                                placed_letters,
+                                placed_is_blank,
+                                record_word,
+                            );
+                            self.rack_counts[letter_code as usize] += 1;
+                        }
+
+                        if has_wildcard {
+                            self.wildcards -= 1;
+                            placed_letters[pos] = letter_code;
+                            placed_is_blank[pos] = true;
+                            let next_min = if direction < 0 && pos < min_pos { pos } else { min_pos };
+                            let next_max = if direction > 0 && pos + 1 > max_pos { pos + 1 } else { max_pos };
+
+                            self.scan_recursive(
+                                anchor_pos,
+                                curr_pos + direction,
+                                child_pointer,
+                                direction,
+                                next_min,
+                                next_max,
+                                tiles_used + 1,
+                                line_idx,
+                                is_vertical,
+                                line_tiles,
+                                line_is_blank,
+                                line_tiles_mask,
+                                line_cross_masks,
+                                line_cross_scores,
+                                line_has_perp,
+                                placed_letters,
+                                placed_is_blank,
+                                record_word,
+                            );
+                            self.wildcards += 1;
+                        }
+                    }
+                }
+            }
+
+            if !has_sibling {
+                break;
+            }
+            child_pointer += 1;
+        }
+    }
+}
+
+#[cfg(test)]
+pub mod tests {
+    use super::*;
+    use crate::solver;
+
+    #[test]
+    fn test_fast_move_scanner_exact_parity() {
+        let mut board = Board::new();
+        let gaddag = solver::get_gaddag_for_lexicon("twl06");
+        board.set_tile(7, 7, 'C', false);
+        board.set_tile(7, 8, 'A', false);
+        board.set_tile(7, 9, 'T', false);
+        board.prepare_solver(gaddag);
+
+        let rack = "SATINES";
+        let slow_gen = MoveGenerator::new(&board, gaddag, rack);
+        let all_plays = slow_gen.generate_all();
+        let best_slow = all_plays.iter().max_by_key(|p| p.score).unwrap();
+
+        let best_fast = FastMoveScanner::find_best_play(&board, gaddag, rack).unwrap();
+        let max_score = FastMoveScanner::find_max_score(&board, gaddag, rack);
+
+        assert_eq!(best_fast.score, best_slow.score);
+        assert_eq!(max_score, best_slow.score);
     }
 }

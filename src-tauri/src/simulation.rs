@@ -3,7 +3,7 @@
 use crate::bingo::FastPrng;
 use crate::board::Board;
 use crate::gaddag::Gaddag;
-use crate::generator::{CandidatePlay, MoveGenerator};
+use crate::generator::{CandidatePlay, FastMoveScanner};
 use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
@@ -125,12 +125,10 @@ pub fn simulate_opponent_replies(
                 }
             }
 
-            let opp_generator = MoveGenerator::new(&next_board, gaddag, &opp_rack_str);
-            let opp_plays = opp_generator.generate_all();
-            let best_opp_play = opp_plays.iter().max_by_key(|p| p.score);
+            let best_opp_play = FastMoveScanner::find_best_play(&next_board, gaddag, &opp_rack_str);
 
             let (opp_reply, opp_score) = match best_opp_play {
-                Some(best) => (Some(best.word.clone()), best.score),
+                Some(ref best) => (Some(best.word.clone()), best.score),
                 None => (None, 0i16),
             };
 
@@ -138,7 +136,7 @@ pub fn simulate_opponent_replies(
             if multi_ply {
                 // Playout Turn 2: Opponent commits best move onto turn2_board
                 let mut turn2_board = next_board.clone();
-                if let Some(best) = best_opp_play {
+                if let Some(ref best) = best_opp_play {
                     let opp_bytes = best.word.as_bytes();
                     for j in 0..opp_bytes.len() {
                         let r = if best.is_vertical { best.row + j } else { best.row };
@@ -171,10 +169,8 @@ pub fn simulate_opponent_replies(
                     }
                 }
 
-                // Player evaluates follow-up response (Ply 2)
-                let p2_generator = MoveGenerator::new(&turn2_board, gaddag, &player_rack);
-                let p2_plays = p2_generator.generate_all();
-                let p2_score = p2_plays.iter().map(|p| p.score).max().unwrap_or(0i16);
+                // Player evaluates follow-up response (Ply 2) with zero-allocation find_max_score
+                let p2_score = FastMoveScanner::find_max_score(&turn2_board, gaddag, &player_rack);
 
                 // 2-turn spread margin: (player turn 1 + player turn 2) - opponent reply
                 trial_margin = (play.score as i32 + p2_score as i32) - (opp_score as i32);
