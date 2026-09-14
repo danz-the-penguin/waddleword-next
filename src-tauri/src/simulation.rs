@@ -5,6 +5,24 @@ use crate::board::Board;
 use crate::gaddag::Gaddag;
 use crate::generator::{CandidatePlay, FastMoveScanner};
 use rayon::prelude::*;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+pub static ACTIVE_SOLVE_ID: AtomicU64 = AtomicU64::new(0);
+
+pub fn cancel_current_solve() {
+    ACTIVE_SOLVE_ID.fetch_add(1, Ordering::SeqCst);
+}
+
+pub fn next_solve_id() -> u64 {
+    ACTIVE_SOLVE_ID.fetch_add(1, Ordering::SeqCst) + 1
+}
+
+pub fn is_solve_cancelled(solve_id: u64) -> bool {
+    if solve_id == 0 {
+        return false;
+    }
+    ACTIVE_SOLVE_ID.load(Ordering::Relaxed) != solve_id
+}
 
 #[derive(Debug, Clone)]
 pub struct SimulationResult {
@@ -38,6 +56,7 @@ pub fn simulate_opponent_replies(
     base_seed: u32,
     score_differential: i16,
     multi_ply: bool,
+    solve_id: u64,
 ) -> SimulationResult {
     let mut next_board = board.clone();
     let word_bytes = play.word.as_bytes();
@@ -86,6 +105,9 @@ pub fn simulate_opponent_replies(
     let results: Vec<(Option<String>, i16, i32, f32)> = (0..sample_count)
         .into_par_iter()
         .map(|idx| {
+            if is_solve_cancelled(solve_id) {
+                return (None, 0i16, 0i32, 0.0f32);
+            }
             let sample_seed = base_seed.wrapping_add((idx as u32).wrapping_mul(0x9E3779B9));
             let mut prng = FastPrng::new(sample_seed);
 
@@ -281,6 +303,7 @@ mod tests {
             42,
             100,
             true,
+            0,
         );
         assert_eq!(res_ahead.win_prob, 100.0);
         assert!(res_ahead.net_margin >= 0.0);
@@ -296,7 +319,22 @@ mod tests {
             42,
             -200,
             true,
+            0,
         );
         assert_eq!(res_behind.win_prob, 0.0);
+    }
+
+    #[test]
+    fn test_solve_cancellation() {
+        let id1 = next_solve_id();
+        assert!(!is_solve_cancelled(id1));
+
+        // Cancelling should increment the global token
+        cancel_current_solve();
+        assert!(is_solve_cancelled(id1));
+
+        let id2 = next_solve_id();
+        assert!(!is_solve_cancelled(id2));
+        assert!(is_solve_cancelled(id1));
     }
 }

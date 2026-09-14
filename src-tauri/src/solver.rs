@@ -122,6 +122,8 @@ pub fn compute_unseen_counts(board: &Board, rack: &str) -> [u8; 27] {
     unseen
 }
 
+pub use crate::simulation::cancel_current_solve;
+
 pub fn solve_advanced(
     mut board: Board,
     rack: &str,
@@ -133,7 +135,9 @@ pub fn solve_advanced(
     lexicon: Option<&str>,
     equity_mode: Option<&str>,
     sim_quality: Option<&str>,
+    solve_id: Option<u64>,
 ) -> Vec<CandidatePlay> {
+    let effective_solve_id = solve_id.unwrap_or(0);
     let gaddag = get_gaddag_for_lexicon(lexicon.unwrap_or("twl06"));
     board.prepare_solver(gaddag);
 
@@ -285,6 +289,9 @@ pub fn solve_advanced(
         .par_iter_mut()
         .enumerate()
         .for_each(|(i, play)| {
+            if crate::simulation::is_solve_cancelled(effective_solve_id) {
+                return;
+            }
             let seed = base_position_hash ^ ((i as u32) << 16);
             let sim = simulate_opponent_replies(
                 &board,
@@ -296,7 +303,12 @@ pub fn solve_advanced(
                 seed,
                 score_differential,
                 multi_ply,
+                effective_solve_id,
             );
+
+            if crate::simulation::is_solve_cancelled(effective_solve_id) {
+                return;
+            }
 
             play.opp_best_reply = sim.best_reply;
             play.opp_best_score = sim.best_score;
@@ -351,6 +363,10 @@ pub fn solve_advanced(
             play.total_val = (final_val * 10.0).round() / 10.0;
         });
 
+    if crate::simulation::is_solve_cancelled(effective_solve_id) {
+        return Vec::new();
+    }
+
     // 4b. Strategic Tile Exchange & Dump Optimization (Phase 7)
     // When bag has at least 7 tiles, evaluate all 127 tile exchange combinations.
     let bag_allows_exchange = bag_count.is_none() || bag_count.unwrap_or(0) >= 7;
@@ -382,7 +398,7 @@ pub fn solve_advanced(
 }
 
 pub fn solve(board: Board, rack: &str, sort_mode: &str) -> Vec<CandidatePlay> {
-    solve_advanced(board, rack, sort_mode, 0, None, None, None, None, None, None)
+    solve_advanced(board, rack, sort_mode, 0, None, None, None, None, None, None, None)
 }
 
 /// Evaluates all 2^N - 1 non-empty subsets of rack tiles to find the optimal strategic exchange.
@@ -590,7 +606,7 @@ mod tests {
     #[test]
     fn test_solve_advanced_with_bag_and_score() {
         let board = Board::new();
-        let plays = solve_advanced(board, "SATINES", "strategic", 40, Some(5), None, None, None, None, None);
+        let plays = solve_advanced(board, "SATINES", "strategic", 40, Some(5), None, None, None, None, None, None);
 
         assert!(!plays.is_empty());
         let top = &plays[0];
@@ -604,7 +620,7 @@ mod tests {
     #[test]
     fn test_solve_advanced_with_manual_available_tiles() {
         let board = Board::new();
-        let plays = solve_advanced(board, "SATINES", "strategic", 0, Some(0), None, Some("QIEX"), None, None, None);
+        let plays = solve_advanced(board, "SATINES", "strategic", 0, Some(0), None, Some("QIEX"), None, None, None, None);
         assert!(!plays.is_empty());
         let top = &plays[0];
         assert!(top.is_deterministic_opponent);
@@ -613,32 +629,32 @@ mod tests {
     #[test]
     fn test_solve_different_lexicons() {
         let board1 = Board::new();
-        let plays_twl = solve_advanced(board1, "SATINES", "strategic", 0, None, None, None, Some("twl06"), None, None);
+        let plays_twl = solve_advanced(board1, "SATINES", "strategic", 0, None, None, None, Some("twl06"), None, None, None);
         assert!(!plays_twl.is_empty());
 
         let board2 = Board::new();
-        let plays_csw = solve_advanced(board2, "SATINES", "strategic", 0, None, None, None, Some("csw24"), None, None);
+        let plays_csw = solve_advanced(board2, "SATINES", "strategic", 0, None, None, None, Some("csw24"), None, None, None);
         assert!(!plays_csw.is_empty());
     }
 
     #[test]
     fn test_solve_static_vs_trained_equity() {
         let board1 = Board::new();
-        let plays_trained = solve_advanced(board1, "SATINES", "strategic", 0, None, None, None, None, Some("trained"), None);
+        let plays_trained = solve_advanced(board1, "SATINES", "strategic", 0, None, None, None, None, Some("trained"), None, None);
         assert!(!plays_trained.is_empty());
 
         let board2 = Board::new();
-        let plays_static = solve_advanced(board2, "SATINES", "strategic", 0, None, None, None, None, Some("static"), None);
+        let plays_static = solve_advanced(board2, "SATINES", "strategic", 0, None, None, None, None, Some("static"), None, None);
         assert!(!plays_static.is_empty());
     }
 
     #[test]
     fn test_solve_sim_quality_presets() {
         let board = Board::new();
-        let plays_blitz = solve_advanced(board.clone(), "SATINES", "strategic", 0, None, None, None, None, None, Some("blitz"));
+        let plays_blitz = solve_advanced(board.clone(), "SATINES", "strategic", 0, None, None, None, None, None, Some("blitz"), None);
         assert!(!plays_blitz.is_empty());
 
-        let plays_deep = solve_advanced(board, "SATINES", "strategic", 0, None, None, None, None, None, Some("deep"));
+        let plays_deep = solve_advanced(board, "SATINES", "strategic", 0, None, None, None, None, None, Some("deep"), None);
         assert!(!plays_deep.is_empty());
     }
 
@@ -646,7 +662,7 @@ mod tests {
     fn test_solve_pre_endgame_lookahead() {
         let board = Board::new();
         // Leading by 20, bag has 7 tiles
-        let plays = solve_advanced(board, "SATINES", "strategic", 20, Some(7), None, None, None, None, None);
+        let plays = solve_advanced(board, "SATINES", "strategic", 20, Some(7), None, None, None, None, None, None);
         assert!(!plays.is_empty());
         // A 7-letter bingo uses 7 tiles >= bag (7), so it should trigger is_endgame_setup
         let bingo_play = plays.iter().find(|p| p.tiles_used >= 7);
@@ -659,7 +675,7 @@ mod tests {
     fn test_turn1_opening_book_fastpath() {
         let board = Board::new();
         assert!(board.is_empty(), "Initial board must be empty");
-        let plays = solve_advanced(board, "FARMERS", "strategic", 0, None, None, None, None, None, Some("blitz"));
+        let plays = solve_advanced(board, "FARMERS", "strategic", 0, None, None, None, None, None, Some("blitz"), None);
         assert!(!plays.is_empty(), "Turn 1 opening moves must be generated");
         for p in &plays {
             let covers_h8 = if p.is_vertical {
@@ -699,7 +715,7 @@ mod tests {
     fn test_solve_advanced_injects_exchange_when_optimal() {
         let board = Board::new();
         // With an empty board and clunker rack, exchanging clunkers should be in candidate plays
-        let plays = solve_advanced(board, "IIVVWWN", "strategic", 0, Some(25), None, None, None, None, Some("blitz"));
+        let plays = solve_advanced(board, "IIVVWWN", "strategic", 0, Some(25), None, None, None, None, Some("blitz"), None);
         assert!(!plays.is_empty());
         let has_exchange = plays.iter().any(|p| p.is_exchange);
         assert!(has_exchange, "Candidate plays should include optimal exchange play for clogged rack");
@@ -708,7 +724,7 @@ mod tests {
     #[test]
     fn test_solve_championship_m1_rollout_metrics() {
         let board = Board::new();
-        let plays = solve_advanced(board, "FARMERS", "strategic", 10, Some(30), None, None, None, None, Some("championship"));
+        let plays = solve_advanced(board, "FARMERS", "strategic", 10, Some(30), None, None, None, None, Some("championship"), None);
         assert!(!plays.is_empty());
         let top = &plays[0];
         assert!(top.win_prob >= 0.0 && top.win_prob <= 100.0, "Win prob must be valid percentage: {}", top.win_prob);
@@ -721,11 +737,11 @@ mod tests {
     #[test]
     fn test_solve_advanced_lead_spread_modulates_win_prob() {
         let board1 = Board::new();
-        let plays_ahead = solve_advanced(board1, "FARMERS", "strategic", 60, Some(30), None, None, None, None, Some("blitz"));
+        let plays_ahead = solve_advanced(board1, "FARMERS", "strategic", 60, Some(30), None, None, None, None, Some("blitz"), None);
         assert!(!plays_ahead.is_empty());
 
         let board2 = Board::new();
-        let plays_behind = solve_advanced(board2, "FARMERS", "strategic", -60, Some(30), None, None, None, None, Some("blitz"));
+        let plays_behind = solve_advanced(board2, "FARMERS", "strategic", -60, Some(30), None, None, None, None, Some("blitz"), None);
         assert!(!plays_behind.is_empty());
 
         assert!(

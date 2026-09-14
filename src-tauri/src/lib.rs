@@ -51,6 +51,7 @@ fn solve_board(
 
     let mode = sort_mode.unwrap_or_else(|| "strategic".to_string());
     let diff = score_differential.unwrap_or(0);
+    let solve_id = simulation::next_solve_id();
 
     Ok(solver::solve_advanced(
         board,
@@ -63,7 +64,13 @@ fn solve_board(
         lexicon.as_deref(),
         equity_mode.as_deref(),
         sim_quality.as_deref(),
+        Some(solve_id),
     ))
+}
+
+#[tauri::command]
+fn cancel_current_solve() {
+    solver::cancel_current_solve();
 }
 
 #[tauri::command]
@@ -94,6 +101,7 @@ fn steebot_choose_move(
 
     let diff = score_differential.unwrap_or(0);
     let quality = sim_quality.unwrap_or_else(|| "championship".to_string());
+    let solve_id = simulation::next_solve_id();
     let plays = solver::solve_advanced(
         board,
         &bot_rack,
@@ -105,6 +113,7 @@ fn steebot_choose_move(
         lexicon.as_deref(),
         Some("trained"),
         Some(&quality),
+        Some(solve_id),
     );
 
     Ok(plays.into_iter().next())
@@ -323,6 +332,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             greet,
             solve_board,
+            cancel_current_solve,
             check_word,
             get_word_hooks,
             find_rack_anagrams,

@@ -92,6 +92,17 @@ export async function solveBoardWithRust({
   ];
 }
 
+export async function cancelCurrentSolve() {
+  if (typeof window !== "undefined" && window.__TAURI_INTERNALS__) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return await invoke("cancel_current_solve");
+    } catch (err) {
+      console.warn("Tauri cancel_current_solve error:", err);
+    }
+  }
+}
+
 export async function checkWordWithRust(word, lexicon = "twl06") {
   if (!word || word.length < 2) return false;
   if (typeof window !== "undefined" && window.__TAURI_INTERNALS__) {

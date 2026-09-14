@@ -31,6 +31,7 @@ import { useDebounce } from "./hooks/useDebounce";
 import { calculateBoardMoveScore } from "./lib/scrabbleScorer";
 import {
   solveBoardWithRust,
+  cancelCurrentSolve,
   steebotChooseMove,
   toggleWindowMaximize,
   minimizeWindow,
@@ -227,6 +228,7 @@ export default function App() {
   const isBoardLockedRef = useRef(isBoardLocked);
   const hoveredPlayRef = useRef(hoveredPlay);
   const highlightedPlayIndexRef = useRef(highlightedPlayIndex);
+  const activeRequestIdRef = useRef(0);
 
   useEffect(() => {
     boardRef.current = board;
@@ -949,12 +951,20 @@ export default function App() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [handleUndo, handleRedo, pushHistory]);
 
+  // Immediately abort background rollouts the instant user types on rack or board
+  useEffect(() => {
+    cancelCurrentSolve();
+  }, [rack, board]);
+
   // Trigger solver (uses debounced values to avoid excess IPC calls while typing)
   const runSolver = useCallback(async () => {
     if (!debouncedRack.trim()) {
+      cancelCurrentSolve();
       setPlays([]);
       return;
     }
+    const reqId = ++activeRequestIdRef.current;
+    cancelCurrentSolve();
     setIsSolving(true);
     try {
       const effectiveManualTiles = (enableIntel && intelMode === "manual" && debouncedManualTiles.trim())
@@ -972,11 +982,17 @@ export default function App() {
         equityMode,
         simQuality,
       });
-      setPlays(results);
+      if (activeRequestIdRef.current === reqId) {
+        setPlays(results);
+      }
     } catch (err) {
-      console.error("Solver execution error:", err);
+      if (activeRequestIdRef.current === reqId) {
+        console.error("Solver execution error:", err);
+      }
     } finally {
-      setIsSolving(false);
+      if (activeRequestIdRef.current === reqId) {
+        setIsSolving(false);
+      }
     }
   }, [debouncedBoard, debouncedRack, sortMode, scoreDifferential, bagCount, enableIntel, intelMode, debouncedManualTiles, activeLexicon, equityMode, simQuality]);
 
@@ -1464,6 +1480,7 @@ export default function App() {
   );
 
   const handleStopSparring = useCallback(() => {
+    cancelCurrentSolve();
     setIsSparringActive(false);
     setIsBotThinking(false);
     setTurnEquityFeedback(null);
