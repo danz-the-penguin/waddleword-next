@@ -957,7 +957,7 @@ export default function App() {
   }, [rack, board]);
 
   // Trigger solver (uses debounced values to avoid excess IPC calls while typing)
-  const runSolver = useCallback(async () => {
+  const runSolver = useCallback(async (forcedQuality = null) => {
     if (!debouncedRack.trim()) {
       cancelCurrentSolve();
       setPlays([]);
@@ -971,6 +971,10 @@ export default function App() {
         ? debouncedManualTiles.toUpperCase().replace(/[^A-Z?]/g, "")
         : null;
 
+      // In sparring mode or live typing, use fast 1-ply trained equity (blitz) for 60 FPS instant recommendations.
+      // Full 15,000 Championship M1 rollouts are used for Steebot AI moves and explicit deep playouts.
+      const effectiveSimQuality = forcedQuality || (isSparringActive ? "blitz" : (simQuality === "championship" ? "blitz" : simQuality));
+
       const results = await solveBoardWithRust({
         boardTiles: debouncedBoard,
         rack: debouncedRack.toUpperCase(),
@@ -980,7 +984,7 @@ export default function App() {
         manualAvailableTiles: effectiveManualTiles,
         lexicon: activeLexicon,
         equityMode,
-        simQuality,
+        simQuality: effectiveSimQuality,
       });
       if (activeRequestIdRef.current === reqId) {
         setPlays(results);
@@ -994,7 +998,7 @@ export default function App() {
         setIsSolving(false);
       }
     }
-  }, [debouncedBoard, debouncedRack, sortMode, scoreDifferential, bagCount, enableIntel, intelMode, debouncedManualTiles, activeLexicon, equityMode, simQuality]);
+  }, [debouncedBoard, debouncedRack, sortMode, scoreDifferential, bagCount, enableIntel, intelMode, debouncedManualTiles, activeLexicon, equityMode, simQuality, isSparringActive]);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -2188,7 +2192,7 @@ export default function App() {
                             fontWeight: "bold",
                           }}
                         >
-                          ⏳ {activeSparringBot.name} Thinking...
+                          ⏳ {activeSparringBot.name} Thinking{activeSparringBot.simQuality === "championship" || simQuality === "championship" ? " (15k Solves)" : ""}...
                         </span>
                       ) : (
                         <span
@@ -2391,6 +2395,8 @@ export default function App() {
                   }}
                   scoreDifferential={scoreDifferential}
                   simQuality={simQuality}
+                  isSolving={isSolving}
+                  onRunDeepRollout={() => runSolver("championship")}
                 />
               </div>
             </div>

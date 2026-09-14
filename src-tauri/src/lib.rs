@@ -274,12 +274,36 @@ fn get_system_specs() -> SystemSpecs {
         .unwrap_or(8);
     let active_workers = solver::get_worker_threads();
 
+    let cpu_arch = if cfg!(target_arch = "aarch64") {
+        "Apple Silicon (ARM64)"
+    } else if cfg!(target_arch = "x86_64") {
+        "x86_64 (Intel / AMD)"
+    } else {
+        "Standard Architecture"
+    };
+
+    let os = if cfg!(target_os = "macos") {
+        "macOS"
+    } else if cfg!(target_os = "linux") {
+        "Linux"
+    } else if cfg!(target_os = "windows") {
+        "Windows"
+    } else {
+        "Desktop OS"
+    };
+
+    let simd = if cfg!(target_arch = "aarch64") {
+        "NEON 128-bit SIMD Vector Acceleration"
+    } else {
+        "AVX2 / SSE4.2 SIMD Vector Acceleration"
+    };
+
     SystemSpecs {
-        cpu_arch: "Apple Silicon (aarch64 / ARM64)".to_string(),
+        cpu_arch: cpu_arch.to_string(),
         logical_cores,
         active_workers,
-        simd_feature: "NEON 128-bit SIMD Vector Acceleration".to_string(),
-        os: "macOS".to_string(),
+        simd_feature: simd.to_string(),
+        os: os.to_string(),
     }
 }
 
@@ -327,6 +351,18 @@ fn get_bayesian_rack_inference(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let num_threads = std::thread::available_parallelism()
+        .map(|p| p.get())
+        .unwrap_or(8)
+        .saturating_sub(1)
+        .max(1);
+
+    solver::set_worker_threads(num_threads);
+
+    let _ = rayon::ThreadPoolBuilder::new()
+        .num_threads(num_threads)
+        .build_global();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![

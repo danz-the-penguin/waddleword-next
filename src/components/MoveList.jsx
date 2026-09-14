@@ -61,6 +61,8 @@ export default function MoveList({
   onSelectPlayIndex,
   scoreDifferential = 0,
   simQuality = "standard",
+  isSolving = false,
+  onRunDeepRollout,
 }) {
   if (plays.length === 0) {
     return (
@@ -132,6 +134,26 @@ export default function MoveList({
             >
               👑 CHAMPIONSHIP M1
             </span>
+          )}
+          {simQuality === "championship" && onRunDeepRollout && (
+            <button
+              className="win98-btn"
+              onClick={onRunDeepRollout}
+              disabled={isSolving}
+              style={{
+                fontSize: "9px",
+                padding: "1px 6px",
+                cursor: isSolving ? "wait" : "pointer",
+                fontWeight: "bold",
+                backgroundColor: isSolving ? "#e0e0e0" : "#d4d0c8",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "3px",
+              }}
+              title="Execute full 15,000 Monte Carlo game rollouts (25 candidates x 300 samples x 2 plies)"
+            >
+              {isSolving ? "⏳ Solving..." : "👑 Playout (15k)"}
+            </button>
           )}
         </div>
 
