@@ -182,6 +182,11 @@ export default function App() {
     const saved = localStorage.getItem("waddleword_blunder_shield");
     return saved !== null ? saved === "true" : true;
   });
+  const [autoDeepOnSettle, setAutoDeepOnSettle] = useState(() => {
+    if (typeof window === "undefined") return false;
+    const saved = localStorage.getItem("waddleword_auto_deep");
+    return saved === "true";
+  });
   const [blunderHazard, setBlunderHazard] = useState(null);
   const [lastOppContext, setLastOppContext] = useState(null);
   const [snapshotToast, setSnapshotToast] = useState(null);
@@ -209,8 +214,9 @@ export default function App() {
       localStorage.setItem("waddleword_sim_quality", simQuality);
       localStorage.setItem("waddleword_clock_visible", String(isClockVisible));
       localStorage.setItem("waddleword_blunder_shield", String(enableBlunderShield));
+      localStorage.setItem("waddleword_auto_deep", String(autoDeepOnSettle));
     }
-  }, [activeLexicon, isTournamentLayout, equityMode, simQuality, isClockVisible, enableBlunderShield]);
+  }, [activeLexicon, isTournamentLayout, equityMode, simQuality, isClockVisible, enableBlunderShield, autoDeepOnSettle]);
 
   // Match Replay & GCG state (Phase 7)
   const [matchHistory, setMatchHistory] = useState([]);
@@ -1006,6 +1012,17 @@ export default function App() {
     }, 250);
     return () => clearTimeout(timer);
   }, [runSolver]);
+
+  // Auto-rollout on settle: Automatically computes 15,000 Championship M1 rollouts when typing settles for 900ms
+  useEffect(() => {
+    if (!autoDeepOnSettle || simQuality !== "championship" || isSparringActive || !debouncedRack.trim()) {
+      return;
+    }
+    const deepTimer = setTimeout(() => {
+      runSolver("championship");
+    }, 900);
+    return () => clearTimeout(deepTimer);
+  }, [debouncedRack, debouncedBoard, autoDeepOnSettle, simQuality, isSparringActive, runSolver]);
 
   const doApplyPlay = (play) => {
     if (!play) return;
@@ -2397,6 +2414,8 @@ export default function App() {
                   simQuality={simQuality}
                   isSolving={isSolving}
                   onRunDeepRollout={() => runSolver("championship")}
+                  autoDeepOnSettle={autoDeepOnSettle}
+                  onSetAutoDeepOnSettle={setAutoDeepOnSettle}
                 />
               </div>
             </div>

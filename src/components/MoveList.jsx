@@ -63,6 +63,8 @@ export default function MoveList({
   simQuality = "standard",
   isSolving = false,
   onRunDeepRollout,
+  autoDeepOnSettle = false,
+  onSetAutoDeepOnSettle,
 }) {
   if (plays.length === 0) {
     return (
@@ -154,6 +156,29 @@ export default function MoveList({
             >
               {isSolving ? "⏳ Solving..." : "👑 Playout (15k)"}
             </button>
+          )}
+          {simQuality === "championship" && onSetAutoDeepOnSettle && (
+            <label
+              style={{
+                fontSize: "9px",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "3px",
+                cursor: "pointer",
+                color: "#222",
+                fontWeight: "normal",
+                userSelect: "none",
+              }}
+              title="Automatically calculate 15,000 Championship M1 rollouts when typing pauses for 1s"
+            >
+              <input
+                type="checkbox"
+                checked={autoDeepOnSettle}
+                onChange={(e) => onSetAutoDeepOnSettle(e.target.checked)}
+                style={{ margin: 0, cursor: "pointer" }}
+              />
+              Auto 15k
+            </label>
           )}
         </div>
 
