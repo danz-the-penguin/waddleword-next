@@ -9,6 +9,7 @@ pub mod inference;
 pub mod simulation;
 pub mod solver;
 pub mod strategy;
+pub mod zobrist;
 
 use board::Board;
 use generator::CandidatePlay;
