@@ -177,7 +177,7 @@ pub fn solve_advanced(
             opp_rack.push('?');
         }
 
-        let endgame_res = solve_endgame(&board, rack, &opp_rack, gaddag, 4);
+        let endgame_res = solve_endgame(&board, rack, &opp_rack, gaddag, 8);
 
         if let Some(mut top_play) = endgame_res.best_play {
             top_play.total_val = endgame_res.terminal_margin as f32;

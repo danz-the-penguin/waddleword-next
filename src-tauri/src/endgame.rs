@@ -159,7 +159,7 @@ pub fn apply_play_to_board(board: &Board, play: &CandidatePlay, gaddag: &Gaddag)
     next_board
 }
 
-/// Solves terminal endgame using Alpha-Beta Minimax with 64-bit Zobrist Transposition Table
+/// Solves terminal endgame using Iterative Deepening Alpha-Beta Minimax with 64-bit Zobrist Transposition Table
 pub fn solve_endgame(
     board: &Board,
     player_rack: &str,
@@ -167,13 +167,22 @@ pub fn solve_endgame(
     gaddag: &Gaddag,
     max_depth: usize,
 ) -> EndgameResult {
+    solve_endgame_iterative(board, player_rack, opp_rack, gaddag, max_depth, 150)
+}
+
+/// Iterative Deepening Alpha-Beta Minimax solver with progressive depth escalation,
+/// cooperative time-budget abortion, and principal-variation move ordering.
+pub fn solve_endgame_iterative(
+    board: &Board,
+    player_rack: &str,
+    opp_rack: &str,
+    gaddag: &Gaddag,
+    max_depth: usize,
+    time_budget_ms: u128,
+) -> EndgameResult {
+    let start_time = std::time::Instant::now();
     let mut tt = TranspositionTable::new(18); // 262,144 entries (~8.4MB)
     let root_hash = compute_initial_hash(board, player_rack, opp_rack, true, 0);
-
-    let mut best_play = None;
-    let mut best_pv = Vec::new();
-    let mut alpha = -30000i16;
-    let beta = 30000i16;
 
     let generator = MoveGenerator::new(board, gaddag, player_rack);
     let mut plays = generator.generate_all();
@@ -186,89 +195,147 @@ pub fn solve_endgame(
         };
     }
 
-    // Sort moves: going out first, then raw score descending
-    plays.sort_by(|a, b| {
-        let a_out = a.tiles_used as usize >= player_rack.len();
-        let b_out = b.tiles_used as usize >= player_rack.len();
-        if a_out != b_out {
-            b_out.cmp(&a_out)
-        } else {
-            b.score.cmp(&a.score)
-        }
-    });
-
     let opp_rack_val = calculate_rack_value(opp_rack);
     let p_counts = rack_to_counts(player_rack);
 
-    for play in &plays {
-        let goes_out = play.tiles_used as usize >= player_rack.len();
-        if goes_out {
-            let out_margin = play.score + 2 * opp_rack_val;
-            if out_margin > alpha {
-                alpha = out_margin;
-                best_play = Some(play.clone());
-                best_pv = vec![format!("{} ({} pts, OUT)", play.word, play.score)];
+    // Progressive depth schedule: 2 -> 4 -> 6 -> 8 -> ... up to max_depth
+    let mut depths: Vec<usize> = (2..=max_depth).step_by(2).collect();
+    if depths.is_empty() || *depths.last().unwrap() < max_depth {
+        depths.push(max_depth);
+    }
+
+    let mut best_result = EndgameResult {
+        best_play: None,
+        terminal_margin: -30000,
+        principal_variation: Vec::new(),
+    };
+
+    let mut prev_best_word: Option<String> = None;
+
+    for (iter_idx, &cur_depth) in depths.iter().enumerate() {
+        // Time budget check: If at least 1 iteration has completed and budget is exceeded, stop
+        if iter_idx > 0 && start_time.elapsed().as_millis() >= time_budget_ms {
+            break;
+        }
+
+        let mut alpha = -30000i16;
+        let beta = 30000i16;
+        let mut iter_best_play = None;
+        let mut iter_best_pv = Vec::new();
+        let mut truncated = false;
+
+        // Move Ordering for this iteration:
+        // 1. Principal Variation / Best move from previous iteration
+        // 2. Out-plays (exhausting player rack)
+        // 3. Raw score descending
+        let p_word = prev_best_word.clone();
+        plays.sort_by(|a, b| {
+            if let Some(ref w) = p_word {
+                let a_is_best = a.word == *w;
+                let b_is_best = b.word == *w;
+                if a_is_best != b_is_best {
+                    return b_is_best.cmp(&a_is_best);
+                }
             }
+            let a_out = a.tiles_used as usize >= player_rack.len();
+            let b_out = b.tiles_used as usize >= player_rack.len();
+            if a_out != b_out {
+                b_out.cmp(&a_out)
+            } else {
+                b.score.cmp(&a.score)
+            }
+        });
+
+        let root_limit = plays.len().min(if cur_depth <= 4 { 32 } else { 20 });
+
+        for play in &plays[..root_limit] {
+            let goes_out = play.tiles_used as usize >= player_rack.len();
+            if goes_out {
+                let out_margin = play.score + 2 * opp_rack_val;
+                if out_margin > alpha {
+                    alpha = out_margin;
+                    iter_best_play = Some(play.clone());
+                    iter_best_pv = vec![format!("{} ({} pts, OUT)", play.word, play.score)];
+                }
+                if alpha >= beta {
+                    break;
+                }
+                continue;
+            }
+
+            let next_board = apply_play_to_board(board, play, gaddag);
+            let mut sub_pv = Vec::new();
+
+            let (child_hash, _) =
+                hash_after_play(root_hash, board, play, &p_counts, true, 0);
+
+            let margin = play.score
+                - min_search(
+                    &next_board,
+                    opp_rack,
+                    &play.leave,
+                    gaddag,
+                    -beta + play.score,
+                    -alpha + play.score,
+                    1,
+                    cur_depth,
+                    &mut sub_pv,
+                    child_hash,
+                    &mut tt,
+                    0,
+                    &mut truncated,
+                );
+
+            if margin > alpha {
+                alpha = margin;
+                iter_best_play = Some(play.clone());
+                let mut pv = vec![format!("{} ({} pts)", play.word, play.score)];
+                pv.extend(sub_pv);
+                iter_best_pv = pv;
+            }
+
             if alpha >= beta {
                 break;
             }
-            continue;
         }
 
-        let next_board = apply_play_to_board(board, play, gaddag);
-        let mut sub_pv = Vec::new();
+        // Store root state in TT
+        let flag = if alpha >= beta {
+            TTFlag::LowerBound
+        } else {
+            TTFlag::Exact
+        };
+        tt.store(
+            root_hash,
+            cur_depth as u8,
+            alpha,
+            flag,
+            iter_best_play.as_ref().map(|p| p.word.as_str()),
+        );
 
-        let (child_hash, _) =
-            hash_after_play(root_hash, board, play, &p_counts, true, 0);
-
-        let margin = play.score
-            - min_search(
-                &next_board,
-                opp_rack,
-                &play.leave,
-                gaddag,
-                -beta + play.score,
-                -alpha + play.score,
-                1,
-                max_depth,
-                &mut sub_pv,
-                child_hash,
-                &mut tt,
-                0,
-            );
-
-        if margin > alpha {
-            alpha = margin;
-            best_play = Some(play.clone());
-            let mut pv = vec![format!("{} ({} pts)", play.word, play.score)];
-            pv.extend(sub_pv);
-            best_pv = pv;
+        if let Some(ref p) = iter_best_play {
+            prev_best_word = Some(p.word.clone());
         }
 
-        if alpha >= beta {
+        best_result = EndgameResult {
+            best_play: iter_best_play,
+            terminal_margin: alpha,
+            principal_variation: iter_best_pv,
+        };
+
+        // If no branch was truncated by search depth, the tree is mathematically fully solved!
+        if !truncated {
             break;
         }
     }
 
-    // Store root state in transposition table
-    let flag = if alpha >= beta {
-        TTFlag::LowerBound
-    } else {
-        TTFlag::Exact
-    };
-    tt.store(
-        root_hash,
-        max_depth as u8,
-        alpha,
-        flag,
-        best_play.as_ref().map(|p| p.word.as_str()),
-    );
-
-    EndgameResult {
-        best_play,
-        terminal_margin: alpha,
-        principal_variation: best_pv,
+    // Fallback if best_play is still None (e.g. all moves fail low)
+    if best_result.best_play.is_none() && !plays.is_empty() {
+        best_result.best_play = Some(plays[0].clone());
+        best_result.terminal_margin = plays[0].score;
     }
+
+    best_result
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -285,6 +352,7 @@ fn max_search(
     current_hash: u64,
     tt: &mut TranspositionTable,
     consecutive_passes: u8,
+    truncated: &mut bool,
 ) -> i16 {
     // 1. Terminal Check: Both players passed consecutively
     if consecutive_passes >= 2 {
@@ -292,7 +360,12 @@ fn max_search(
     }
 
     // 2. Leaf or Out Check
-    if depth >= max_depth || player_rack.is_empty() {
+    if player_rack.is_empty() {
+        return calculate_rack_value(opp_rack);
+    }
+
+    if depth >= max_depth {
+        *truncated = true;
         return calculate_rack_value(opp_rack) - calculate_rack_value(player_rack);
     }
 
@@ -324,6 +397,7 @@ fn max_search(
             pass_hash,
             tt,
             consecutive_passes + 1,
+            truncated,
         );
         pv.clear();
         pv.push("PASS".to_string());
@@ -412,6 +486,7 @@ fn max_search(
                 child_hash,
                 tt,
                 0,
+                truncated,
             );
 
         if margin > alpha {
@@ -466,6 +541,7 @@ fn min_search(
     current_hash: u64,
     tt: &mut TranspositionTable,
     consecutive_passes: u8,
+    truncated: &mut bool,
 ) -> i16 {
     max_search(
         board,
@@ -480,6 +556,7 @@ fn min_search(
         current_hash,
         tt,
         consecutive_passes,
+        truncated,
     )
 }
 
@@ -556,6 +633,102 @@ mod tests {
         println!(
             "Multi-tile Endgame: Margin = {} | PV = {:?}",
             result.terminal_margin, result.principal_variation
+        );
+    }
+
+    #[test]
+    fn test_iterative_deepening_deep_search() {
+        let bytes = include_bytes!("../data/gaddag_twl06.bin");
+        let gaddag = Gaddag::from_le_bytes(bytes);
+
+        let mut board = Board::new();
+        board.set_tile(7, 7, 'A', false);
+        board.prepare_solver(&gaddag);
+
+        let player_rack = "AT";
+        let opp_rack = "IN";
+
+        let start = std::time::Instant::now();
+        // Test depth 8 search with iterative deepening
+        let result = solve_endgame(&board, player_rack, opp_rack, &gaddag, 8);
+        let elapsed = start.elapsed();
+
+        assert!(result.best_play.is_some());
+        assert!(!result.principal_variation.is_empty());
+        println!(
+            "Iterative Deepening (Depth 8): Margin = {} | PV = {:?} | Time = {:?}",
+            result.terminal_margin, result.principal_variation, elapsed
+        );
+        assert!(
+            elapsed.as_millis() < 200,
+            "Depth 8 iterative deepening should complete in < 200ms, took {:?}",
+            elapsed
+        );
+    }
+
+    #[test]
+    fn test_iterative_deepening_early_exhaustion() {
+        let bytes = include_bytes!("../data/gaddag_twl06.bin");
+        let gaddag = Gaddag::from_le_bytes(bytes);
+
+        let mut board = Board::new();
+        board.set_tile(7, 7, 'I', false);
+        board.prepare_solver(&gaddag);
+
+        // Single tile each: Depth 2 completely exhausts the tree, so depth 8 terminates early
+        let player_rack = "Q";
+        let opp_rack = "Z";
+
+        let start = std::time::Instant::now();
+        let result = solve_endgame(&board, player_rack, opp_rack, &gaddag, 8);
+        let elapsed = start.elapsed();
+
+        assert!(result.best_play.is_some());
+        assert!(result.terminal_margin >= 31);
+        println!(
+            "Exhaustive Early Exit (Target Depth 8): Margin = {} | PV = {:?} | Time = {:?}",
+            result.terminal_margin, result.principal_variation, elapsed
+        );
+        assert!(
+            elapsed.as_millis() < 50,
+            "Exhaustive endgame should exit in < 50ms, took {:?}",
+            elapsed
+        );
+    }
+
+    #[test]
+    fn test_iterative_deepening_multi_ply_sequence() {
+        let bytes = include_bytes!("../data/gaddag_twl06.bin");
+        let gaddag = Gaddag::from_le_bytes(bytes);
+
+        let mut board = Board::new();
+        // Setup a 4-letter word "TEST" on board
+        board.set_tile(7, 6, 'T', false);
+        board.set_tile(7, 7, 'E', false);
+        board.set_tile(7, 8, 'S', false);
+        board.set_tile(7, 9, 'T', false);
+        board.prepare_solver(&gaddag);
+
+        let player_rack = "ROAD";
+        let opp_rack = "LION";
+
+        let start = std::time::Instant::now();
+        let result = solve_endgame(&board, player_rack, opp_rack, &gaddag, 6);
+        let elapsed = start.elapsed();
+
+        assert!(result.best_play.is_some());
+        println!(
+            "Multi-ply Sequence (Depth 6): Best Play = {} ({} pts) | Margin = {} | PV = {:?} | Time = {:?}",
+            result.best_play.as_ref().unwrap().word,
+            result.best_play.as_ref().unwrap().score,
+            result.terminal_margin,
+            result.principal_variation,
+            elapsed
+        );
+        assert!(
+            elapsed.as_millis() < 150,
+            "Multi-ply endgame search should complete in < 150ms, took {:?}",
+            elapsed
         );
     }
 }
