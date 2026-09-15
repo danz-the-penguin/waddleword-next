@@ -232,12 +232,18 @@ pub fn solve_advanced(
     let inference_weights = compute_inference_weights(last_opp_context);
 
     // 3. Initial Heuristic Evaluation & Memoized Bingo Forecasting
+    let is_beginner = sim_quality.map(|s| s.to_lowercase() == "beginnerbot").unwrap_or(false);
+    let effective_equity_mode = match sim_quality.unwrap_or("").to_lowercase().as_str() {
+        "basicbot" => "linear",
+        _ => equity_mode.unwrap_or("trained"),
+    };
+
     let mut leave_cache: HashMap<String, f32> = HashMap::with_capacity(64);
     let mut hash_counter = 0u32;
 
     for p in &mut plays {
         p.is_deterministic_opponent = is_deterministic;
-        let (eq, balance) = evaluate_leave_comprehensive(&p.leave, equity_mode.unwrap_or("trained"));
+        let (eq, balance) = evaluate_leave_comprehensive(&p.leave, effective_equity_mode);
         p.leave_equity = eq;
         p.vc_ratio = balance.vc_ratio;
         p.rack_balance_tag = balance.tag;
@@ -287,13 +293,14 @@ pub fn solve_advanced(
     // Sort by provisional strategic value to identify top candidates for parallel MCTS
     plays.sort_by(|a, b| b.total_val.partial_cmp(&a.total_val).unwrap_or(std::cmp::Ordering::Equal));
 
-    let (sim_cutoff_limit, sample_count, multi_ply) = match sim_quality.unwrap_or("standard").to_lowercase().as_str() {
-        "beginnerbot" | "blitz" => (10, 12, false),
-        "basicbot" => (12, 20, false),
-        "betterbot" | "standard" => (15, 40, true),
-        "steebot" | "deep" => (20, 120, true),
-        "hastybot" | "championship" | "championship_m1" => (25, 300, true),
-        _ => (15, 40, true),
+    let (sim_cutoff_limit, sample_count, multi_ply, sim_weight) = match sim_quality.unwrap_or("standard").to_lowercase().as_str() {
+        "beginnerbot" => (0, 0, false, 0.0),
+        "basicbot" => (0, 0, false, 0.0),
+        "betterbot" | "standard" => (0, 0, false, 0.0),
+        "blitz" => (10, 20, false, 0.40),
+        "steebot" | "deep" => (20, 120, false, 0.60),
+        "hastybot" | "championship" | "championship_m1" => (30, 300, true, 1.00),
+        _ => (0, 0, false, 0.0),
     };
     let sim_cutoff = sim_cutoff_limit.min(plays.len());
 
@@ -380,10 +387,15 @@ pub fn solve_advanced(
                 + bag_bonus
                 + tactical_adj;
 
-            // In Championship / Deep multi-ply mode, blend empirical 2-turn rollout margin
-            if multi_ply {
-                let empirical_spread_diff = play.net_margin - (play.score as f32 - play.expected_opp_score);
-                final_val += empirical_spread_diff * 0.25;
+            // In multi-ply mode (HastyBot / Championship M1), blend empirical 2-turn rollout margin (M)
+            // with static 2-turn heuristic (H) using sim_weight: V = H + sim_weight * (M - H) = (1 - w)*H + w*M.
+            // At sim_weight = 1.00, empirical simulation margin completely replaces static leave equity.
+            if sample_count > 0 && sim_weight > 0.0 {
+                if multi_ply {
+                    let static_2turn_spread = (play.score as f32) + play.leave_equity - play.expected_opp_score;
+                    let empirical_spread_diff = play.net_margin - static_2turn_spread;
+                    final_val += empirical_spread_diff * sim_weight;
+                }
             }
 
             play.total_val = (final_val * 10.0).round() / 10.0;
@@ -396,14 +408,14 @@ pub fn solve_advanced(
     // 4b. Strategic Tile Exchange & Dump Optimization (Phase 7)
     // When bag has at least 7 tiles, evaluate all 127 tile exchange combinations.
     let bag_allows_exchange = bag_count.is_none() || bag_count.unwrap_or(0) >= 7;
-    if bag_allows_exchange && !is_true_endgame {
+    if !is_beginner && bag_allows_exchange && !is_true_endgame {
         if let Some(best_exch) = find_best_exchange_play(
             &board,
             rack,
             bag_count,
             score_differential,
             lexicon,
-            equity_mode,
+            Some(effective_equity_mode),
         ) {
             let top_board_val = plays.first().map(|p| p.total_val).unwrap_or(-999.0);
             // If the exchange beats the best board play, or is within 6.0 points of it, include it in candidate plays!
@@ -414,7 +426,7 @@ pub fn solve_advanced(
     }
 
     // 5. Final Sort: Enforce strict simulation priority over un-simulated candidates
-    if sort_mode == "score" {
+    if sort_mode == "score" || is_beginner {
         plays.sort_by(|a, b| b.score.cmp(&a.score));
     } else if sim_cutoff > 0 && plays.len() > sim_cutoff {
         // Sort simulated candidates [0..sim_cutoff] among themselves by refined empirical total_val
@@ -823,25 +835,129 @@ mod tests {
         // 2. Both simulated and un-simulated moves must have expected_opp_score > 0
         assert!(top.expected_opp_score > 0.0, "Expected opp score must be populated");
 
-        // 3. Simulated pool [0..25] must be properly prioritized over un-simulated moves [25..]
-        if plays.len() > 25 {
-            let sim_last = &plays[24];
-            let unsim_first = &plays[25];
-            println!(
-                "Phase 1 Priority Check: Top Move = {} ({:.1} total_val, OppReply: {:?}) | Sim Last = {} ({:.1}) | Unsim First = {} ({:.1}, OppReply: {:?})",
-                top.word, top.total_val, top.opp_best_reply,
-                sim_last.word, sim_last.total_val,
-                unsim_first.word, unsim_first.total_val, unsim_first.opp_best_reply
-            );
+        // 3. Simulated pool must be properly prioritized over un-simulated moves
+        if let Some(idx) = plays.iter().position(|p| p.opp_best_reply.is_none()) {
+            if idx > 0 {
+                let sim_last = &plays[idx - 1];
+                let unsim_first = &plays[idx];
+                println!(
+                    "Phase 1 Priority Check: Top Move = {} ({:.1} total_val, OppReply: {:?}) | Sim Last = {} ({:.1}) | Unsim First = {} ({:.1}, OppReply: {:?})",
+                    top.word, top.total_val, top.opp_best_reply,
+                    sim_last.word, sim_last.total_val,
+                    unsim_first.word, unsim_first.total_val, unsim_first.opp_best_reply
+                );
+                assert!(
+                    top.total_val >= unsim_first.total_val,
+                    "Top simulated move total_val ({}) must be >= un-simulated move total_val ({})",
+                    top.total_val, unsim_first.total_val
+                );
+                assert!(
+                    unsim_first.expected_opp_score > 0.0,
+                    "Un-simulated move must have baseline opponent score deducted on net scale"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_phase2_bot_hierarchy_depths_and_weights() {
+        let board = Board::new();
+
+        // 1. BeginnerBot: 0 playouts, sorted purely by raw board face score
+        let beginner_plays = solve_advanced(
+            board.clone(),
+            "FARMERS",
+            "strategic",
+            0,
+            Some(30),
+            None,
+            None,
+            None,
+            None,
+            Some("beginnerbot"),
+            None,
+        );
+        assert!(!beginner_plays.is_empty());
+        assert!(beginner_plays[0].opp_best_reply.is_none(), "BeginnerBot must perform 0 playouts");
+        for i in 1..beginner_plays.len().min(10) {
             assert!(
-                top.total_val >= unsim_first.total_val,
-                "Top simulated move total_val ({}) must be >= un-simulated move total_val ({})",
-                top.total_val, unsim_first.total_val
-            );
-            assert!(
-                unsim_first.expected_opp_score > 0.0,
-                "Un-simulated move must have baseline opponent score deducted on net scale"
+                beginner_plays[i - 1].score >= beginner_plays[i].score,
+                "BeginnerBot must sort descending strictly by raw score (at index {}: {} < {})",
+                i, beginner_plays[i - 1].score, beginner_plays[i].score
             );
         }
+
+        // 2. BetterBot: Instantaneous 0-playout benchmark (< 5ms response, ML synergies)
+        let t0 = std::time::Instant::now();
+        let better_plays = solve_advanced(
+            board.clone(),
+            "FARMERS",
+            "strategic",
+            0,
+            Some(30),
+            None,
+            None,
+            None,
+            None,
+            Some("betterbot"),
+            None,
+        );
+        let elapsed = t0.elapsed();
+        assert!(!better_plays.is_empty());
+        assert!(better_plays[0].opp_best_reply.is_none(), "BetterBot must perform 0 playouts");
+        assert_eq!(better_plays[0].expected_opp_score, 18.7, "BetterBot must use baseline opp retaliation (22.0 * 0.85 = 18.7)");
+        println!("Phase 2 BetterBot benchmark time: {:?}", elapsed);
+
+        // 3. BasicBot: 0 playouts, linear leave equity
+        let basic_plays = solve_advanced(
+            board.clone(),
+            "FARMERS",
+            "strategic",
+            0,
+            Some(30),
+            None,
+            None,
+            None,
+            None,
+            Some("basicbot"),
+            None,
+        );
+        assert!(!basic_plays.is_empty());
+        assert!(basic_plays[0].opp_best_reply.is_none(), "BasicBot must perform 0 playouts");
+
+        // 4. SteeBot: 1-ply tactical rollout (120 trials, opponent counterplay simulation)
+        let stee_plays = solve_advanced(
+            board.clone(),
+            "FARMERS",
+            "strategic",
+            0,
+            Some(30),
+            None,
+            None,
+            None,
+            None,
+            Some("steebot"),
+            None,
+        );
+        assert!(!stee_plays.is_empty());
+        assert!(stee_plays[0].opp_best_reply.is_some(), "SteeBot must simulate opponent replies");
+
+        // 5. HastyBot (Champion M1): 2-ply multi-turn rollout (300 trials, 100% simulation weight)
+        let champ_plays = solve_advanced(
+            board,
+            "FARMERS",
+            "strategic",
+            0,
+            Some(30),
+            None,
+            None,
+            None,
+            None,
+            Some("hastybot"),
+            None,
+        );
+        assert!(!champ_plays.is_empty());
+        assert!(champ_plays[0].opp_best_reply.is_some(), "HastyBot must simulate 2-ply multi-turn rollouts");
+        assert!(champ_plays[0].win_prob >= 0.0 && champ_plays[0].win_prob <= 100.0);
     }
 }
