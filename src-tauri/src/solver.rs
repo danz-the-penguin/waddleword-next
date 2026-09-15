@@ -179,8 +179,29 @@ pub fn solve_advanced(
 
         let endgame_res = solve_endgame(&board, rack, &opp_rack, gaddag, 8);
 
-        if let Some(mut top_play) = endgame_res.best_play {
+        if !endgame_res.ranked_plays.is_empty() {
+            let mut results = Vec::new();
+            for eval in endgame_res.ranked_plays {
+                let mut p = eval.play;
+                p.total_val = eval.terminal_margin as f32;
+                p.net_margin = eval.terminal_margin as f32;
+                p.is_deterministic_opponent = true;
+                p.opp_best_reply = if !eval.principal_variation.is_empty() {
+                    Some(eval.principal_variation.join(" -> "))
+                } else {
+                    None
+                };
+                p.opp_best_score = 0;
+                p.vc_ratio = "0V/0C".to_string();
+                p.rack_balance_tag = "endgame".to_string();
+                p.rack_balance_desc = "Terminal Endgame Sequence".to_string();
+                p.is_exchange = false;
+                results.push(p);
+            }
+            return results;
+        } else if let Some(mut top_play) = endgame_res.best_play {
             top_play.total_val = endgame_res.terminal_margin as f32;
+            top_play.net_margin = endgame_res.terminal_margin as f32;
             top_play.is_deterministic_opponent = true;
             top_play.opp_best_reply = if !endgame_res.principal_variation.is_empty() {
                 Some(endgame_res.principal_variation.join(" -> "))

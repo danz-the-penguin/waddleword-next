@@ -8,10 +8,18 @@ use crate::zobrist::{
 };
 
 #[derive(Debug, Clone)]
+pub struct EndgamePlayEvaluation {
+    pub play: CandidatePlay,
+    pub terminal_margin: i16,
+    pub principal_variation: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
 pub struct EndgameResult {
     pub best_play: Option<CandidatePlay>,
     pub terminal_margin: i16,
     pub principal_variation: Vec<String>,
+    pub ranked_plays: Vec<EndgamePlayEvaluation>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -34,6 +42,9 @@ pub struct TTEntry {
 pub struct TranspositionTable {
     entries: Vec<Option<TTEntry>>,
     mask: usize,
+    pub hits: usize,
+    pub probes: usize,
+    pub stores: usize,
 }
 
 impl TranspositionTable {
@@ -42,24 +53,32 @@ impl TranspositionTable {
         Self {
             entries: vec![None; size],
             mask: size - 1,
+            hits: 0,
+            probes: 0,
+            stores: 0,
         }
     }
 
     pub fn clear(&mut self) {
         self.entries.fill(None);
+        self.hits = 0;
+        self.probes = 0;
+        self.stores = 0;
     }
 
     #[inline(always)]
     pub fn probe(
-        &self,
+        &mut self,
         hash_key: u64,
         remaining_depth: u8,
         alpha: i16,
         beta: i16,
     ) -> (Option<i16>, Option<String>) {
+        self.probes += 1;
         let idx = (hash_key as usize) & self.mask;
         if let Some(entry) = &self.entries[idx] {
             if entry.hash_key == hash_key {
+                self.hits += 1;
                 let best_word = if entry.best_word_len > 0 {
                     std::str::from_utf8(&entry.best_word[..entry.best_word_len as usize])
                         .ok()
@@ -95,6 +114,7 @@ impl TranspositionTable {
         flag: TTFlag,
         best_word: Option<&str>,
     ) {
+        self.stores += 1;
         let idx = (hash_key as usize) & self.mask;
         let should_replace = match &self.entries[idx] {
             None => true,
@@ -192,6 +212,7 @@ pub fn solve_endgame_iterative(
             best_play: None,
             terminal_margin: -penalty,
             principal_variation: vec!["PASS".to_string()],
+            ranked_plays: Vec::new(),
         };
     }
 
@@ -208,6 +229,7 @@ pub fn solve_endgame_iterative(
         best_play: None,
         terminal_margin: -30000,
         principal_variation: Vec::new(),
+        ranked_plays: Vec::new(),
     };
 
     let mut prev_best_word: Option<String> = None;
@@ -222,6 +244,7 @@ pub fn solve_endgame_iterative(
         let beta = 30000i16;
         let mut iter_best_play = None;
         let mut iter_best_pv = Vec::new();
+        let mut iter_evaluations = Vec::new();
         let mut truncated = false;
 
         // Move Ordering for this iteration:
@@ -252,10 +275,16 @@ pub fn solve_endgame_iterative(
             let goes_out = play.tiles_used as usize >= player_rack.len();
             if goes_out {
                 let out_margin = play.score + 2 * opp_rack_val;
+                let pv = vec![format!("{} ({} pts, OUT)", play.word, play.score)];
+                iter_evaluations.push(EndgamePlayEvaluation {
+                    play: play.clone(),
+                    terminal_margin: out_margin,
+                    principal_variation: pv.clone(),
+                });
                 if out_margin > alpha {
                     alpha = out_margin;
                     iter_best_play = Some(play.clone());
-                    iter_best_pv = vec![format!("{} ({} pts, OUT)", play.word, play.score)];
+                    iter_best_pv = pv;
                 }
                 if alpha >= beta {
                     break;
@@ -286,11 +315,17 @@ pub fn solve_endgame_iterative(
                     &mut truncated,
                 );
 
+            let mut pv = vec![format!("{} ({} pts)", play.word, play.score)];
+            pv.extend(sub_pv);
+            iter_evaluations.push(EndgamePlayEvaluation {
+                play: play.clone(),
+                terminal_margin: margin,
+                principal_variation: pv.clone(),
+            });
+
             if margin > alpha {
                 alpha = margin;
                 iter_best_play = Some(play.clone());
-                let mut pv = vec![format!("{} ({} pts)", play.word, play.score)];
-                pv.extend(sub_pv);
                 iter_best_pv = pv;
             }
 
@@ -317,10 +352,13 @@ pub fn solve_endgame_iterative(
             prev_best_word = Some(p.word.clone());
         }
 
+        iter_evaluations.sort_by(|a, b| b.terminal_margin.cmp(&a.terminal_margin));
+
         best_result = EndgameResult {
             best_play: iter_best_play,
             terminal_margin: alpha,
             principal_variation: iter_best_pv,
+            ranked_plays: iter_evaluations,
         };
 
         // If no branch was truncated by search depth, the tree is mathematically fully solved!
@@ -729,6 +767,213 @@ mod tests {
             elapsed.as_millis() < 150,
             "Multi-ply endgame search should complete in < 150ms, took {:?}",
             elapsed
+        );
+    }
+
+    #[test]
+    fn test_quackle_q_sticking_turnover() {
+        let bytes = include_bytes!("../data/gaddag_twl06.bin");
+        let gaddag = Gaddag::from_le_bytes(bytes);
+
+        let mut board = Board::new();
+        // Setup board with an open 'I' tile
+        board.set_tile(7, 7, 'I', false);
+        board.prepare_solver(&gaddag);
+
+        // Player holds 'Q' (value 10), Opponent holds 'Q' / unplayable clunker
+        let player_rack = "Q";
+        let opp_rack = "Q";
+
+        let result = solve_endgame(&board, player_rack, opp_rack, &gaddag, 8);
+        assert!(result.best_play.is_some());
+        let best = result.best_play.unwrap();
+        assert_eq!(best.word, "QI");
+
+        // Player plays QI (11 pts), exhausts rack. Opponent stuck with Q (10 pts).
+        // Terminal margin = 11 + 2 * 10 = 31 pts.
+        assert_eq!(result.terminal_margin, 31);
+        assert_eq!(result.principal_variation, vec!["QI (11 pts, OUT)"]);
+        println!(
+            "Quackle Q-Sticking Parity: Best = {} | Margin = {} | PV = {:?}",
+            best.word, result.terminal_margin, result.principal_variation
+        );
+    }
+
+    #[test]
+    fn test_quackle_tactical_defense_vs_greedy_trap() {
+        let bytes = include_bytes!("../data/gaddag_twl06.bin");
+        let gaddag = Gaddag::from_le_bytes(bytes);
+
+        let mut board = Board::new();
+        // Setup board with word "AXE" at (7, 6..=8)
+        board.set_tile(7, 6, 'A', false);
+        board.set_tile(7, 7, 'X', false);
+        board.set_tile(7, 8, 'E', false);
+        board.prepare_solver(&gaddag);
+
+        let player_rack = "IT";
+        let opp_rack = "NO";
+
+        let result = solve_endgame(&board, player_rack, opp_rack, &gaddag, 6);
+        assert!(result.best_play.is_some());
+        assert!(!result.ranked_plays.is_empty());
+
+        // Verify that the chosen play maximizes terminal minimax margin
+        let top = &result.ranked_plays[0];
+        println!(
+            "Tactical Defense: Chosen Move = {} ({} pts) | Margin = {} | Opponent PV = {:?}",
+            top.play.word, top.play.score, top.terminal_margin, top.principal_variation
+        );
+
+        if result.ranked_plays.len() > 1 {
+            let second = &result.ranked_plays[1];
+            assert!(
+                top.terminal_margin >= second.terminal_margin,
+                "Top play margin ({}) must be >= second play margin ({})",
+                top.terminal_margin,
+                second.terminal_margin
+            );
+        }
+    }
+
+    #[test]
+    fn test_transposition_table_hit_rate_and_pruning() {
+        let bytes = include_bytes!("../data/gaddag_twl06.bin");
+        let gaddag = Gaddag::from_le_bytes(bytes);
+
+        let mut board = Board::new();
+        board.set_tile(7, 6, 'T', false);
+        board.set_tile(7, 7, 'E', false);
+        board.set_tile(7, 8, 'S', false);
+        board.set_tile(7, 9, 'T', false);
+        board.prepare_solver(&gaddag);
+
+        let player_rack = "ROADS";
+        let opp_rack = "LIONS";
+
+        let mut tt = TranspositionTable::new(16);
+        let root_hash = compute_initial_hash(&board, player_rack, opp_rack, true, 0);
+        let mut truncated = false;
+        let mut pv = Vec::new();
+
+        // Iteration 1 (Depth 2): Populates TT
+        let _s1 = max_search(
+            &board,
+            player_rack,
+            opp_rack,
+            &gaddag,
+            -30000,
+            30000,
+            0,
+            2,
+            &mut pv,
+            root_hash,
+            &mut tt,
+            0,
+            &mut truncated,
+        );
+        let d2_stores = tt.stores;
+
+        // Iteration 2 (Depth 4): Re-searches with TT hits from Depth 2
+        let _s2 = max_search(
+            &board,
+            player_rack,
+            opp_rack,
+            &gaddag,
+            -30000,
+            30000,
+            0,
+            4,
+            &mut pv,
+            root_hash,
+            &mut tt,
+            0,
+            &mut truncated,
+        );
+
+        let hit_rate = if tt.probes > 0 {
+            (tt.hits as f64 / tt.probes as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        println!(
+            "TT Iterative Deepening Telemetry: {} Probes | {} Hits ({:.1}%) | D2 Stores = {}, Total Stores = {}",
+            tt.probes, tt.hits, hit_rate, d2_stores, tt.stores
+        );
+
+        assert!(tt.stores > 0, "Transposition table must store positions");
+        assert!(tt.probes > 0, "Transposition table must be probed");
+        assert!(tt.hits > 0, "Transposition table must produce hits during deepening re-search");
+    }
+
+    #[test]
+    fn test_endgame_7_tile_release_speed_benchmark() {
+        let bytes = include_bytes!("../data/gaddag_twl06.bin");
+        let gaddag = Gaddag::from_le_bytes(bytes);
+
+        let mut board = Board::new();
+        board.set_tile(7, 5, 'P', false);
+        board.set_tile(7, 6, 'L', false);
+        board.set_tile(7, 7, 'A', false);
+        board.set_tile(7, 8, 'Y', false);
+        board.prepare_solver(&gaddag);
+
+        let player_rack = "RETINAS";
+        let opp_rack = "DOGCART";
+
+        let start = std::time::Instant::now();
+        let result = solve_endgame(&board, player_rack, opp_rack, &gaddag, 8);
+        let elapsed = start.elapsed();
+
+        assert!(result.best_play.is_some());
+        println!(
+            "7-Tile Endgame (Depth 8): Play = {} ({} pts) | Margin = {} | PV = {:?} | Time = {:?}",
+            result.best_play.as_ref().unwrap().word,
+            result.best_play.as_ref().unwrap().score,
+            result.terminal_margin,
+            result.principal_variation,
+            elapsed
+        );
+        assert!(
+            elapsed.as_millis() < 150,
+            "7-tile endgame search should complete in < 150ms, took {:?}",
+            elapsed
+        );
+    }
+
+    #[test]
+    fn test_endgame_ranked_leaderboard_integrity() {
+        let bytes = include_bytes!("../data/gaddag_twl06.bin");
+        let gaddag = Gaddag::from_le_bytes(bytes);
+
+        let mut board = Board::new();
+        board.set_tile(7, 7, 'A', false);
+        board.prepare_solver(&gaddag);
+
+        let player_rack = "AT";
+        let opp_rack = "IN";
+
+        let result = solve_endgame(&board, player_rack, opp_rack, &gaddag, 4);
+        assert!(!result.ranked_plays.is_empty(), "Leaderboard must not be empty");
+
+        // Verify descending sort by terminal margin
+        for i in 1..result.ranked_plays.len() {
+            assert!(
+                result.ranked_plays[i - 1].terminal_margin >= result.ranked_plays[i].terminal_margin,
+                "Leaderboard plays must be sorted descending by terminal margin"
+            );
+        }
+
+        println!(
+            "Endgame Leaderboard ({} candidates evaluated): Top 3 = {:?}",
+            result.ranked_plays.len(),
+            result
+                .ranked_plays
+                .iter()
+                .take(3)
+                .map(|e| (e.play.word.as_str(), e.terminal_margin, &e.principal_variation))
+                .collect::<Vec<_>>()
         );
     }
 }
