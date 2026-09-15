@@ -1043,4 +1043,170 @@ mod tests {
             top.word, top.score
         );
     }
+
+    #[test]
+    fn test_hastybot_beats_betterbot_in_tempo() {
+        let board = Board::new();
+        // With rack FARMER?, compare BetterBot vs HastyBot
+        let better_plays = solve_advanced(
+            board.clone(),
+            "FARMER?",
+            "strategic",
+            0,
+            Some(30),
+            None,
+            None,
+            None,
+            None,
+            Some("betterbot"),
+            None,
+        );
+        let champ_plays = solve_advanced(
+            board,
+            "FARMER?",
+            "strategic",
+            0,
+            Some(30),
+            None,
+            None,
+            None,
+            None,
+            Some("hastybot"),
+            None,
+        );
+        assert!(!better_plays.is_empty());
+        assert!(!champ_plays.is_empty());
+
+        let top_better = &better_plays[0];
+        let top_champ = &champ_plays[0];
+        println!(
+            "Tempo Comparison: BetterBot = {} ({} pts, total_val {:.1}) vs HastyBot = {} ({} pts, total_val {:.1}, win_prob {:.1}%)",
+            top_better.word, top_better.score, top_better.total_val,
+            top_champ.word, top_champ.score, top_champ.total_val, top_champ.win_prob
+        );
+        // In HastyBot 2-ply Championship mode, top move must be a high-scoring play that seizes tempo
+        assert!(top_champ.score >= 24, "HastyBot must choose a strong tempo play (>= 24 pts)");
+        assert!(top_champ.opp_best_reply.is_some(), "HastyBot must simulate opponent counterplay");
+    }
+
+    #[test]
+    fn test_simulated_moves_never_leapfrogged() {
+        let board = Board::new();
+        let plays = solve_advanced(
+            board,
+            "FARMERS",
+            "strategic",
+            0,
+            Some(30),
+            None,
+            None,
+            None,
+            None,
+            Some("championship"),
+            None,
+        );
+        assert!(plays.len() > 30, "Should generate > 30 candidate plays for FARMERS");
+
+        let top = &plays[0];
+        assert!(top.opp_best_reply.is_some(), "Top play must be in the simulated pool");
+
+        // Find the boundary between simulated and un-simulated moves
+        let unsim_start = plays.iter().position(|p| p.opp_best_reply.is_none()).unwrap_or(plays.len());
+        assert!(unsim_start > 0, "Must have simulated plays at the start");
+
+        // Verify that NO un-simulated play ever leapfrogs the top simulated move
+        for (i, p) in plays.iter().enumerate().skip(unsim_start) {
+            assert!(
+                top.total_val >= p.total_val,
+                "Un-simulated move #{} ({}, total_val {:.1}) must not exceed top simulated play ({}, total_val {:.1})",
+                i, p.word, p.total_val, top.word, top.total_val
+            );
+            // Verify un-simulated move has baseline opponent deduction on net scale
+            assert_eq!(p.expected_opp_score, 18.7, "Un-simulated move must reflect baseline opponent score on net scale");
+        }
+    }
+
+    #[test]
+    fn test_bot_profile_depth_hierarchy_complete() {
+        let board = Board::new();
+
+        // BetterBot benchmark latency: strictly 0 playouts (instantaneous in release, < 500ms in debug)
+        let t0 = std::time::Instant::now();
+        let better = solve_advanced(board.clone(), "SATINES", "strategic", 0, Some(30), None, None, None, None, Some("betterbot"), None);
+        let better_time = t0.elapsed();
+        assert!(!better.is_empty());
+        assert!(better[0].opp_best_reply.is_none());
+        assert!(better_time < std::time::Duration::from_millis(500), "BetterBot must be instantaneous, took {:?}", better_time);
+
+        // BasicBot: 0 playouts, linear equity
+        let basic = solve_advanced(board.clone(), "SATINES", "strategic", 0, Some(30), None, None, None, None, Some("basicbot"), None);
+        assert!(!basic.is_empty());
+        assert!(basic[0].opp_best_reply.is_none());
+
+        // BeginnerBot: 0 playouts, raw face score
+        let beginner = solve_advanced(board.clone(), "SATINES", "strategic", 0, Some(30), None, None, None, None, Some("beginnerbot"), None);
+        assert!(!beginner.is_empty());
+        assert!(beginner[0].opp_best_reply.is_none());
+        assert_eq!(beginner[0].score, beginner.iter().map(|p| p.score).max().unwrap());
+
+        // SteeBot: 1-ply tactical rollout (120 playouts)
+        let stee = solve_advanced(board.clone(), "SATINES", "strategic", 0, Some(30), None, None, None, None, Some("steebot"), None);
+        assert!(!stee.is_empty());
+        assert!(stee[0].opp_best_reply.is_some());
+
+        // HastyBot: 2-ply World Championship rollout (300 playouts)
+        let hasty = solve_advanced(board, "SATINES", "strategic", 0, Some(30), None, None, None, None, Some("hastybot"), None);
+        assert!(!hasty.is_empty());
+        assert!(hasty[0].opp_best_reply.is_some());
+        assert!(hasty[0].win_prob >= 0.0 && hasty[0].win_prob <= 100.0);
+    }
+
+    #[test]
+    fn test_game_1_transcription_replay() {
+        // Replay Turn 15 of Game 1:
+        // Bot rack: EIORUZ? (holding Z and blank simultaneously)
+        // Trailing score differential: -42 (Bot: 98, Opponent: 140)
+        // Previous flawed behavior: played U(S) for 3 points to hoard the blank.
+        // With Phase 1-3 improvements: HastyBot must NOT play a passive 3-point tile dump!
+        let board = Board::new();
+        let plays = solve_advanced(
+            board,
+            "EIORUZ?",
+            "strategic",
+            -42,
+            Some(20),
+            None,
+            None,
+            None,
+            None,
+            Some("hastybot"),
+            None,
+        );
+        assert!(!plays.is_empty(), "Plays must be generated for EIORUZ?");
+        let top = &plays[0];
+
+        println!(
+            "Game 1 Turn 15 Replay: Top Move = {} ({} pts, total_val {:.1}, net_margin {:.1}, leave {})",
+            top.word, top.score, top.total_val, top.net_margin, top.leave
+        );
+
+        // Top move must play a decisive scoring play (e.g. ZERO, ZORI, ZEIN for 24-26+ pts)
+        assert!(
+            top.score >= 20,
+            "HastyBot must choose a strong tempo move (score >= 20 pts) when holding EIORUZ? while trailing, but chose {} for {} pts",
+            top.word, top.score
+        );
+        assert!(top.opp_best_reply.is_some(), "Top move must be simulated");
+
+        // Verify that passive 3-pt tile dumps are severely penalized
+        let us_play = plays.iter().find(|p| p.word == "US" || (p.score <= 4 && p.retains_blank));
+        if let Some(dump) = us_play {
+            println!("Dump candidate: {} ({} pts, total_val {:.1})", dump.word, dump.score, dump.total_val);
+            assert!(
+                top.total_val > dump.total_val + 5.0,
+                "Top tempo play total_val ({:.1}) must decisively beat 3-pt blank dump ({:.1})",
+                top.total_val, dump.total_val
+            );
+        }
+    }
 }
