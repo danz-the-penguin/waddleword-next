@@ -170,6 +170,21 @@ pub fn analyze_rack_balance(leave: &str) -> RackBalanceAnalysis {
         reasons.push("Double-K (-9.0)".to_string());
     }
 
+    // Blank Clogged by Clunkers (Phase 3)
+    if blanks > 0 {
+        if counts[(b'Q' - b'A') as usize] > 0 && counts[(b'U' - b'A') as usize] == 0 {
+            adjustment -= 4.0;
+            tags.push("blank_clogged");
+            reasons.push("Blank Clogged (Unpaired Q: -4.0)".to_string());
+        }
+        let heavy_clunkers = counts[(b'V' - b'A') as usize] + counts[(b'W' - b'A') as usize] + counts[(b'J' - b'A') as usize];
+        if heavy_clunkers >= 2 {
+            adjustment -= 3.5;
+            tags.push("blank_clogged");
+            reasons.push("Blank Clogged (Heavy Clunkers: -3.5)".to_string());
+        }
+    }
+
     // 2. V/C Balance & Starvation Penalties
     if total_tiles >= 2 {
         if v_count == 0 && blanks == 0 {
@@ -502,5 +517,18 @@ mod tests {
         assert_eq!(sub_stem.tag, "bingo_stem");
         assert!(sub_stem.description.contains("Primary Stem"));
         assert!(sub_stem.equity_adjustment >= 4.0);
+    }
+
+    #[test]
+    fn test_blank_clogged_by_clunkers() {
+        let q_blank = analyze_rack_balance("?Q");
+        assert_eq!(q_blank.tag, "blank_clogged");
+        assert!(q_blank.description.contains("Unpaired Q"));
+        assert!(q_blank.equity_adjustment <= -4.0);
+
+        let clunker_blank = analyze_rack_balance("?VW");
+        assert_eq!(clunker_blank.tag, "blank_clogged");
+        assert!(clunker_blank.description.contains("Heavy Clunkers"));
+        assert!(clunker_blank.equity_adjustment <= -3.5);
     }
 }

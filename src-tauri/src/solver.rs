@@ -124,6 +124,62 @@ pub fn compute_unseen_counts(board: &Board, rack: &str) -> [u8; 27] {
 
 pub use crate::simulation::cancel_current_solve;
 
+/// Computes tactical board control adjustments, dynamic blank opportunity costs,
+/// tempo decay taxes, and pre-endgame bag depletion incentives.
+pub fn compute_tactical_adjustments(
+    play: &mut CandidatePlay,
+    score_differential: i16,
+    bag_count: Option<u8>,
+) -> f32 {
+    let mut tactical_adj = 0.0f32;
+    if play.exposes_3w { tactical_adj -= 3.0; }
+    if play.opens_triple_triple { tactical_adj -= 3.5; }
+    if play.opens_double_double { tactical_adj -= 1.2; }
+    if play.blocks_triple_triple { tactical_adj += 2.0; }
+    if play.blocks_double_double { tactical_adj += 1.0; }
+    if play.blank_surcharge_applied { tactical_adj -= 1.5; }
+
+    // Dynamic Blank Opportunity Cost & Tempo Decay (Phase 3)
+    if play.retains_blank {
+        if score_differential <= -30 {
+            // Trailing Deficit Urgency: trailing heavily requires immediate scoring points
+            if play.score < 25 {
+                let urgency_tax = ((25 - play.score) as f32) * 0.5;
+                tactical_adj -= urgency_tax;
+            }
+        } else if play.score < 20 {
+            // Low-Scoring Blank Retention: holding a blank while scoring < 20 surrenders board tempo
+            let tempo_tax = ((20 - play.score) as f32) * 0.6;
+            tactical_adj -= tempo_tax;
+        } else {
+            tactical_adj += 1.5;
+        }
+    } else if score_differential <= -30 && play.score >= 35 {
+        // Reward cashing in the blank for large immediate swing points when trailing
+        tactical_adj += 2.0;
+    }
+
+    // Pre-Endgame Lookahead & Bag Depletion (Bag <= 14)
+    if let Some(bag) = bag_count {
+        if bag >= 1 && bag <= 14 {
+            if play.tiles_used >= bag {
+                play.is_endgame_setup = true;
+                if score_differential >= 0 {
+                    tactical_adj += 5.0; // Seizes terminal endgame control
+                }
+            } else if bag.saturating_sub(play.tiles_used) <= 3 && bag.saturating_sub(play.tiles_used) >= 1 && score_differential <= 15 {
+                play.is_endgame_bait = true;
+                tactical_adj -= 3.0; // Leaves 1-3 tiles in bag for opponent to grab with full knowledge
+            }
+            if bag <= 8 && play.retains_blank && score_differential >= -15 {
+                tactical_adj += 2.5; // Blank preservation in late pre-endgame when competitive
+            }
+        }
+    }
+
+    tactical_adj
+}
+
 pub fn solve_advanced(
     mut board: Board,
     rack: &str,
@@ -259,33 +315,7 @@ pub fn solve_advanced(
 
         let bag_bonus = calculate_strategic_modifiers(score_differential, bag_count, p.tiles_used);
         let bingo_boost = p.bingo_prob_next_turn * 0.12;
-
-        let mut tactical_adj = 0.0f32;
-        if p.exposes_3w { tactical_adj -= 3.0; }
-        if p.opens_triple_triple { tactical_adj -= 3.5; }
-        if p.opens_double_double { tactical_adj -= 1.2; }
-        if p.blocks_triple_triple { tactical_adj += 2.0; }
-        if p.blocks_double_double { tactical_adj += 1.0; }
-        if p.retains_blank { tactical_adj += 1.5; }
-        if p.blank_surcharge_applied { tactical_adj -= 1.5; }
-
-        // Pre-Endgame Lookahead & Bag Depletion (Bag <= 14)
-        if let Some(bag) = bag_count {
-            if bag >= 1 && bag <= 14 {
-                if p.tiles_used >= bag {
-                    p.is_endgame_setup = true;
-                    if score_differential >= 0 {
-                        tactical_adj += 5.0; // Seizes terminal endgame control
-                    }
-                } else if bag.saturating_sub(p.tiles_used) <= 3 && bag.saturating_sub(p.tiles_used) >= 1 && score_differential <= 15 {
-                    p.is_endgame_bait = true;
-                    tactical_adj -= 3.0; // Leaves 1-3 tiles in bag for opponent to grab with full knowledge
-                }
-                if bag <= 8 && p.retains_blank {
-                    tactical_adj += 2.5; // Blank preservation in late pre-endgame
-                }
-            }
-        }
+        let tactical_adj = compute_tactical_adjustments(p, score_differential, bag_count);
 
         p.total_val = ((p.score as f32 + eq + bingo_boost + runway * runway_mult + bag_bonus + tactical_adj) * 10.0).round() / 10.0;
     }
@@ -350,33 +380,7 @@ pub fn solve_advanced(
             play.net_margin = sim.net_margin;
 
             let bag_bonus = calculate_strategic_modifiers(score_differential, bag_count, play.tiles_used);
-
-            let mut tactical_adj = 0.0f32;
-            if play.exposes_3w { tactical_adj -= 3.0; }
-            if play.opens_triple_triple { tactical_adj -= 3.5; }
-            if play.opens_double_double { tactical_adj -= 1.2; }
-            if play.blocks_triple_triple { tactical_adj += 2.0; }
-            if play.blocks_double_double { tactical_adj += 1.0; }
-            if play.retains_blank { tactical_adj += 1.5; }
-            if play.blank_surcharge_applied { tactical_adj -= 1.5; }
-
-            // Pre-Endgame Lookahead & Bag Depletion (Bag <= 14)
-            if let Some(bag) = bag_count {
-                if bag >= 1 && bag <= 14 {
-                    if play.tiles_used >= bag {
-                        play.is_endgame_setup = true;
-                        if score_differential >= 0 {
-                            tactical_adj += 5.0;
-                        }
-                    } else if bag.saturating_sub(play.tiles_used) <= 3 && bag.saturating_sub(play.tiles_used) >= 1 && score_differential <= 15 {
-                        play.is_endgame_bait = true;
-                        tactical_adj -= 3.0;
-                    }
-                    if bag <= 8 && play.retains_blank {
-                        tactical_adj += 2.5;
-                    }
-                }
-            }
+            let tactical_adj = compute_tactical_adjustments(play, score_differential, bag_count);
 
             // Final Calibrated Strategic Value
             let mut final_val = (play.score as f32)
@@ -959,5 +963,84 @@ mod tests {
         assert!(!champ_plays.is_empty());
         assert!(champ_plays[0].opp_best_reply.is_some(), "HastyBot must simulate 2-ply multi-turn rollouts");
         assert!(champ_plays[0].win_prob >= 0.0 && champ_plays[0].win_prob <= 100.0);
+    }
+
+    #[test]
+    fn test_phase3_dynamic_blank_opportunity_cost() {
+        // 1. Direct unit verification of compute_tactical_adjustments
+        let mut low_score_play = CandidatePlay {
+            word: "US".to_string(),
+            row: 7,
+            col: 7,
+            is_vertical: false,
+            score: 3,
+            tiles_used: 1,
+            is_bingo: false,
+            leave: "EIORZ?".to_string(),
+            leave_equity: 25.5,
+            total_val: 0.0,
+            bingo_prob_next_turn: 0.0,
+            bingo_runway_score: 0.0,
+            opp_best_reply: None,
+            opp_best_score: 0,
+            expected_opp_score: 0.0,
+            exposes_3w: false,
+            opens_triple_triple: false,
+            opens_double_double: false,
+            blocks_triple_triple: false,
+            blocks_double_double: false,
+            retains_blank: true,
+            blank_surcharge_applied: false,
+            is_deterministic_opponent: false,
+            is_endgame_setup: false,
+            is_endgame_bait: false,
+            vc_ratio: "3V/3C/1?".to_string(),
+            rack_balance_tag: "neutral".to_string(),
+            rack_balance_desc: "".to_string(),
+            is_exchange: false,
+            win_prob: 50.0,
+            net_margin: 0.0,
+        };
+
+        let adj_tied = compute_tactical_adjustments(&mut low_score_play, 0, Some(30));
+        // Tempo tax: (20 - 3) * 0.6 = 10.2 deduction
+        assert!((adj_tied - (-10.2)).abs() < 1e-4, "3-pt tile dump hoarding blank must receive -10.2 tempo tax, got {}", adj_tied);
+
+        let adj_trailing = compute_tactical_adjustments(&mut low_score_play, -40, Some(30));
+        // Trailing urgency tax: (25 - 3) * 0.5 = 11.0 deduction
+        assert!((adj_trailing - (-11.0)).abs() < 1e-4, "3-pt dump while trailing by 40 must receive -11.0 urgency tax, got {}", adj_trailing);
+
+        let mut high_score_play = low_score_play.clone();
+        high_score_play.score = 26;
+        let adj_solid = compute_tactical_adjustments(&mut high_score_play, 0, Some(30));
+        assert!((adj_solid - 1.5).abs() < 1e-4, "Solid scoring play retaining blank must receive standard +1.5 bonus, got {}", adj_solid);
+
+        // 2. Full engine check with blank rack on opening board
+        let board = Board::new();
+        let plays = solve_advanced(
+            board,
+            "FARMER?",
+            "strategic",
+            0,
+            Some(30),
+            None,
+            None,
+            None,
+            None,
+            Some("championship"),
+            None,
+        );
+        assert!(!plays.is_empty());
+        let top = &plays[0];
+        println!(
+            "Phase 3 Blank Rack Opening: Top Move = {} ({} pts) | TotalVal = {:.1} | Leave = {} | RetainsBlank = {}",
+            top.word, top.score, top.total_val, top.leave, top.retains_blank
+        );
+        // The engine must not choose a passive 2-4 point dump when holding a near-bingo blank rack
+        assert!(
+            top.score >= 24,
+            "Top move with blank rack FARMER? must play a strong scoring move (>= 24 pts), found: {} ({} pts)",
+            top.word, top.score
+        );
     }
 }
