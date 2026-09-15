@@ -119,6 +119,54 @@ fn steebot_choose_move(
     Ok(plays.into_iter().next())
 }
 
+const DICT_BYTES: &[u8] = include_bytes!("../data/tournament_definitions.bin");
+
+#[tauri::command]
+fn get_word_definition(word: String, _lexicon: Option<String>) -> Option<String> {
+    if word.len() < 2 || word.len() > 15 {
+        return None;
+    }
+    let target = word.to_ascii_uppercase();
+    if DICT_BYTES.len() < 16 {
+        return None;
+    }
+    let num_words = u32::from_le_bytes(DICT_BYTES[12..16].try_into().ok()?) as usize;
+    let index_end = 16 + num_words * 22;
+    if DICT_BYTES.len() < index_end {
+        return None;
+    }
+    let index_bytes = &DICT_BYTES[16..index_end];
+    let defs_offset = index_end;
+
+    let mut low = 0;
+    let mut high = num_words;
+
+    let mut target_padded = [0u8; 16];
+    target_padded[..target.len()].copy_from_slice(target.as_bytes());
+
+    while low < high {
+        let mid = (low + high) / 2;
+        let entry = &index_bytes[mid * 22..(mid + 1) * 22];
+        let word_entry = &entry[0..16];
+
+        match word_entry.cmp(&target_padded) {
+            std::cmp::Ordering::Less => low = mid + 1,
+            std::cmp::Ordering::Greater => high = mid,
+            std::cmp::Ordering::Equal => {
+                let offset = u32::from_le_bytes(entry[16..20].try_into().ok()?) as usize;
+                let len = u16::from_le_bytes(entry[20..22].try_into().ok()?) as usize;
+                let end = defs_offset + offset + len;
+                if end <= DICT_BYTES.len() {
+                    let def_slice = &DICT_BYTES[defs_offset + offset..end];
+                    return std::str::from_utf8(def_slice).ok().map(|s| s.to_string());
+                }
+                return None;
+            }
+        }
+    }
+    None
+}
+
 #[tauri::command]
 fn check_word(word: String, lexicon: Option<String>) -> bool {
     let lex = lexicon.as_deref().unwrap_or("twl06");
@@ -383,7 +431,8 @@ pub fn run() {
             reset_leave_weights,
             get_system_specs,
             set_worker_threads,
-            get_bayesian_rack_inference
+            get_bayesian_rack_inference,
+            get_word_definition
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -391,7 +440,21 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{check_word, get_word_hooks};
+    use super::{check_word, get_word_hooks, get_word_definition};
+
+    #[test]
+    fn test_get_word_definition() {
+        let qi_def = get_word_definition("QI".to_string(), None);
+        assert!(qi_def.is_some(), "QI definition should be found");
+        assert!(qi_def.unwrap().contains("Chinese philosophy"));
+
+        let za_def = get_word_definition("za".to_string(), None);
+        assert!(za_def.is_some(), "ZA definition should be found");
+        assert!(za_def.unwrap().contains("pizza"));
+
+        let non_word = get_word_definition("ZZZZZ".to_string(), None);
+        assert!(non_word.is_none(), "Non-word should return None");
+    }
 
     #[test]
     fn test_check_word_twl06() {

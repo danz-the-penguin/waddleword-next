@@ -159,11 +159,13 @@ export default function Board({
         onKeyDown={(e) => {
           if (e.key === "Enter") {
             e.preventDefault();
+            e.stopPropagation();
             onCommit?.();
             return;
           }
           if (e.key === "Escape") {
             e.preventDefault();
+            e.stopPropagation();
             onRevert?.();
             return;
           }

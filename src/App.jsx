@@ -259,7 +259,9 @@ export default function App() {
     oppScore, setOppScore,
     setHoveredPlay,
     committedBoard, setCommittedBoard,
-    inputMode, setInputMode
+    inputMode, setInputMode,
+    matchHistory, setMatchHistory,
+    currentTurnIdx, setCurrentTurnIdx
   );
 
   // Danger heatmap calculation (declared early to prevent TDZ ReferenceErrors)
@@ -506,22 +508,35 @@ export default function App() {
     };
     setMatchHistory((prev) => [...prev, newTurn]);
 
-    // Replenish human rack in sparring mode
-    if (isSparringActive && !isOpp) {
+    // Replenish or update human rack
+    if (!isOpp) {
       const remainingLeave = stagedMoveEvaluation.leave === "None" ? "" : stagedMoveEvaluation.leave;
-      const { newRack, remainingBag } = replenishRack(remainingLeave, tileBagRef.current, 7);
-      setRack(newRack);
-      tileBagRef.current = remainingBag;
-      setBagCount(remainingBag.length);
+      if (isSparringActive) {
+        const { newRack, remainingBag } = replenishRack(remainingLeave, tileBagRef.current, 7);
+        setRack(newRack);
+        tileBagRef.current = remainingBag;
+        setBagCount(remainingBag.length);
+      } else {
+        setRack(remainingLeave);
+      }
     }
 
-    // Snapshot current board as the new committed state
+    // Snapshot current board as the new committed state and clear active board selection
     setCommittedBoard(board.map((row) => [...row]));
+    setSelectedCell(null);
+    setHoveredPlay(null);
+    setHighlightedPlayIndex(-1);
   }, [stagedMoveEvaluation, inputMode, board, tileOwners, pushHistory, myScore, oppScore, matchHistory.length, rack, dangerSquares.size, isSparringActive]);
 
   // Commit current play: check blunder shield first if enabled
   const commitCurrentPlay = useCallback(() => {
-    if (!stagedMoveEvaluation || !stagedMoveEvaluation.isValid) return;
+    if (!stagedMoveEvaluation) return;
+    if (!stagedMoveEvaluation.isValid) {
+      setSnapshotToast(`⚠️ Cannot commit: ${stagedMoveEvaluation.reason || "Invalid play placement"}`);
+      playWin98Chord();
+      setTimeout(() => setSnapshotToast(null), 3500);
+      return;
+    }
 
     if (enableBlunderShield) {
       const hazard = detectBlunderHazard(board, committedBoard, stagedMoveEvaluation, plays);
@@ -694,15 +709,15 @@ export default function App() {
         return;
       }
 
-      // Ctrl+Z: undo (Phase 3)
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
+      // Ctrl+Z / Cmd+Z: undo (Phase 3)
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "z") {
         if (document.activeElement?.tagName === "INPUT" && document.activeElement.id !== "hidden-board-input") return;
         e.preventDefault();
         handleUndo();
         return;
       }
 
-      // Ctrl+Y or Ctrl+Shift+Z: redo (Phase 3)
+      // Ctrl+Y or Ctrl+Shift+Z / Cmd+Shift+Z: redo (Phase 3)
       if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === "y" || (e.shiftKey && e.key.toLowerCase() === "z"))) {
         if (document.activeElement?.tagName === "INPUT" && document.activeElement.id !== "hidden-board-input") return;
         e.preventDefault();
@@ -761,6 +776,28 @@ export default function App() {
       if (e.key === "Enter") {
         if (document.activeElement?.tagName === "INPUT" && document.activeElement.id !== "hidden-board-input") return;
         e.preventDefault();
+
+        // If uncommitted tiles are staged on the board, prioritize committing the staged move!
+        let hasStagedTiles = false;
+        const curB = boardRef.current;
+        const comB = committedBoardRef.current;
+        if (curB && comB) {
+          for (let r = 0; r < 15; r++) {
+            for (let c = 0; c < 15; c++) {
+              if (curB[r]?.[c] && !comB[r]?.[c]) {
+                hasStagedTiles = true;
+                break;
+              }
+            }
+            if (hasStagedTiles) break;
+          }
+        }
+
+        if (hasStagedTiles) {
+          commitCurrentPlayRef.current?.();
+          return;
+        }
+
         if (hoveredPlayRef.current) {
           handleApplyPlay(hoveredPlayRef.current);
           setHoveredPlay(null);
@@ -840,29 +877,30 @@ export default function App() {
       if (/^[a-zA-Z]$/.test(e.key)) {
         const typedChar = e.shiftKey ? e.key.toLowerCase() : e.key.toUpperCase();
         const existingTile = currentBoard[r][c];
-        const existingOwner = currentOwner[r][c];
-        const opponentMode = inputModeRef.current === "me" ? "opp" : "me";
+        const isCommittedCell = Boolean(committedBoardRef.current?.[r]?.[c]);
 
-        if (existingTile && existingOwner === opponentMode) {
-          // Skip over opponent's tile if same letter
+        if (isCommittedCell && existingTile) {
+          // If cell is already committed and user types the same letter, cleanly advance
           if (existingTile.toUpperCase() === typedChar.toUpperCase()) {
             setSelectedCell(findNextTargetCell(currentBoard, r, c, currentTypingDir));
           }
-        } else {
-          pushHistory();
-          playTileClack();
-          setBoard((prev) => {
-            const next = prev.map((row) => [...row]);
-            next[r][c] = typedChar;
-            return next;
-          });
-          setTileOwners((prev) => {
-            const next = prev.map((row) => [...row]);
-            next[r][c] = inputModeRef.current;
-            return next;
-          });
-          setSelectedCell(findNextTargetCell(currentBoard, r, c, currentTypingDir));
+          // Do not overwrite already committed board tiles
+          return;
         }
+
+        pushHistory();
+        playTileClack();
+        setBoard((prev) => {
+          const next = prev.map((row) => [...row]);
+          next[r][c] = typedChar;
+          return next;
+        });
+        setTileOwners((prev) => {
+          const next = prev.map((row) => [...row]);
+          next[r][c] = inputModeRef.current;
+          return next;
+        });
+        setSelectedCell(findNextTargetCell(currentBoard, r, c, currentTypingDir));
       } else if (e.key === "Backspace") {
         e.preventDefault();
         const opponentMode = inputModeRef.current === "me" ? "opp" : "me";
@@ -1035,6 +1073,7 @@ export default function App() {
       return;
     }
 
+    pushHistory();
     playTileClack();
     const word = play.word;
     const appliedBoard = board.map((row) => [...row]);
@@ -1530,6 +1569,7 @@ export default function App() {
 
       if (!chosenPlay) {
         // Bot passes
+        pushHistory();
         const newTurn = {
           turnNum: matchHistory.length + 1,
           player: "opp",
@@ -1553,6 +1593,7 @@ export default function App() {
       }
 
       if (chosenPlay.is_exchange || chosenPlay.word?.startsWith("EXCH")) {
+        pushHistory();
         const swapped = chosenPlay.word.replace(/^EXCH\s*/i, "").split("");
         const combinedBag = [...tileBagRef.current, ...swapped];
         for (let i = combinedBag.length - 1; i > 0; i--) {
@@ -1598,6 +1639,7 @@ export default function App() {
       }
 
       // Board move
+      pushHistory();
       const word = chosenPlay.word;
       const appliedBoard = committedBoard.map((row) => [...row]);
       for (let i = 0; i < word.length; i++) {

@@ -157,6 +157,23 @@ export async function getWordHooks(word, lexicon = "twl06") {
   return { front, back };
 }
 
+export async function getWordDefinitionWithRust(word, lexicon = "twl06") {
+  if (!word || word.length < 2) return null;
+  if (typeof window !== "undefined" && window.__TAURI_INTERNALS__) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return await invoke("get_word_definition", {
+        word: word.toUpperCase(),
+        lexicon: lexicon || "twl06",
+      });
+    } catch (err) {
+      console.warn("Tauri get_word_definition invoke error:", err);
+      return null;
+    }
+  }
+  return null;
+}
+
 export async function findRackAnagrams(rack, lexicon = "twl06") {
   if (!rack || rack.length < 2) return [];
   if (typeof window !== "undefined" && window.__TAURI_INTERNALS__) {

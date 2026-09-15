@@ -79,7 +79,7 @@ export default function FloatingDefinitionTooltip({
       setIsLoading(true);
 
       if (lookupWord) {
-        lookupWord(w)
+        lookupWord(w, activeLexicon)
           .then((def) => {
             if (isMounted) {
               setDefinition(def || null);
