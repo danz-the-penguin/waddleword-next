@@ -298,12 +298,17 @@ pub fn solve_advanced(
     let sim_cutoff = sim_cutoff_limit.min(plays.len());
 
     // Fill analytical win probability and margin estimates for candidate plays beyond the simulation cutoff
+    let baseline_opp_score = 22.0 * retaliation_mult;
     for play in plays.iter_mut().skip(sim_cutoff) {
-        let est_margin = (play.score as f32) + play.leave_equity - 22.0;
+        let est_margin = (play.score as f32) + play.leave_equity - baseline_opp_score;
         let eff_diff = score_differential as f32 + est_margin;
         let win_prob = (1.0 / (1.0 + (-eff_diff / 28.0).exp())) * 100.0;
+        play.expected_opp_score = (baseline_opp_score * 10.0).round() / 10.0;
         play.net_margin = (est_margin * 10.0).round() / 10.0;
         play.win_prob = (win_prob * 10.0).round() / 10.0;
+
+        // Deduct baseline opponent counterplay so un-simulated moves match the net-spread scale
+        play.total_val = ((play.total_val - baseline_opp_score) * 10.0).round() / 10.0;
     }
 
     plays[0..sim_cutoff]
@@ -408,9 +413,25 @@ pub fn solve_advanced(
         }
     }
 
-    // 5. Final Sort
+    // 5. Final Sort: Enforce strict simulation priority over un-simulated candidates
     if sort_mode == "score" {
         plays.sort_by(|a, b| b.score.cmp(&a.score));
+    } else if sim_cutoff > 0 && plays.len() > sim_cutoff {
+        // Sort simulated candidates [0..sim_cutoff] among themselves by refined empirical total_val
+        plays[0..sim_cutoff].sort_by(|a, b| {
+            b.total_val.partial_cmp(&a.total_val).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        // Sort un-simulated candidates [sim_cutoff..] among themselves on consistent net scale
+        plays[sim_cutoff..].sort_by(|a, b| {
+            b.total_val.partial_cmp(&a.total_val).unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        // If an optimal tile exchange was injected at the end, allow it to compete with the top moves
+        if plays.last().map(|p| p.is_exchange).unwrap_or(false) {
+            plays.sort_by(|a, b| {
+                b.total_val.partial_cmp(&a.total_val).unwrap_or(std::cmp::Ordering::Equal)
+            });
+        }
     } else {
         plays.sort_by(|a, b| b.total_val.partial_cmp(&a.total_val).unwrap_or(std::cmp::Ordering::Equal));
     }
@@ -770,5 +791,57 @@ mod tests {
             "Leading by +60 must produce higher win probability than trailing by -60 (ahead: {}%, behind: {}%)",
             plays_ahead[0].win_prob, plays_behind[0].win_prob
         );
+    }
+
+    #[test]
+    fn test_phase1_scale_alignment_and_simulation_priority() {
+        let board = Board::new();
+        // Standard opening board with FARMERS: dozens of legal moves
+        let plays = solve_advanced(
+            board,
+            "FARMERS",
+            "strategic",
+            0,
+            Some(30),
+            None,
+            None,
+            None,
+            None,
+            Some("championship"),
+            None,
+        );
+        assert!(!plays.is_empty());
+        let top = &plays[0];
+
+        // 1. Top play MUST have been simulated (opp_best_reply is Some)
+        assert!(
+            top.opp_best_reply.is_some(),
+            "Top move in Championship mode must be a simulated move with opponent reply, found: {:?}",
+            top.opp_best_reply
+        );
+
+        // 2. Both simulated and un-simulated moves must have expected_opp_score > 0
+        assert!(top.expected_opp_score > 0.0, "Expected opp score must be populated");
+
+        // 3. Simulated pool [0..25] must be properly prioritized over un-simulated moves [25..]
+        if plays.len() > 25 {
+            let sim_last = &plays[24];
+            let unsim_first = &plays[25];
+            println!(
+                "Phase 1 Priority Check: Top Move = {} ({:.1} total_val, OppReply: {:?}) | Sim Last = {} ({:.1}) | Unsim First = {} ({:.1}, OppReply: {:?})",
+                top.word, top.total_val, top.opp_best_reply,
+                sim_last.word, sim_last.total_val,
+                unsim_first.word, unsim_first.total_val, unsim_first.opp_best_reply
+            );
+            assert!(
+                top.total_val >= unsim_first.total_val,
+                "Top simulated move total_val ({}) must be >= un-simulated move total_val ({})",
+                top.total_val, unsim_first.total_val
+            );
+            assert!(
+                unsim_first.expected_opp_score > 0.0,
+                "Un-simulated move must have baseline opponent score deducted on net scale"
+            );
+        }
     }
 }
